@@ -1,0 +1,17 @@
+<idea-plugin>
+    <id>dev.wvr.mixinvisualizer</id>
+    <name>Mixin Visualizer</name>
+    <vendor email="weever1337@gmail.com" url="https://weever.my">Weever</vendor>
+
+    <description><![CDATA[
+    IntelliJ IDEA plugin for visualizing Mixin injections in real-time using a side-by-side view
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileEditorProvider implementation="dev.wvr.mixinvisualizer.ui.MixinPreviewFileEditorProvider"/>
+        <codeInsight.lineMarkerProvider language="JAVA" implementationClass="dev.wvr.mixinvisualizer.ui.MixinLineMarkerProvider"/>
+    </extensions>
+</idea-plugin>
