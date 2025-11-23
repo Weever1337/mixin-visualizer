@@ -13,5 +13,8 @@
     <extensions defaultExtensionNs="com.intellij">
         <fileEditorProvider implementation="dev.wvr.mixinvisualizer.ui.MixinPreviewFileEditorProvider"/>
         <codeInsight.lineMarkerProvider language="JAVA" implementationClass="dev.wvr.mixinvisualizer.ui.MixinLineMarkerProvider"/>
+
+        <fileType name="JVM Bytecode" implementationClass="dev.wvr.mixinvisualizer.lang.BytecodeFileType" fieldName="INSTANCE" language="JVM Bytecode" extensions="jvm"/>
+        <lang.syntaxHighlighterFactory language="JVM Bytecode" implementationClass="dev.wvr.mixinvisualizer.lang.BytecodeSyntaxHighlighterFactory"/>
     </extensions>
 </idea-plugin>
