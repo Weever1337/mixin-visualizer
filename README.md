@@ -37,7 +37,7 @@ The project is a Work In Progress, with the following planned features:
     - [ ] [MixinSquared](https://github.com/Bawnorton/MixinSquared) (button to see class transformed with MixinSquared)
 - [ ] Improve code structure and error handling (refactor transformer code, please)
 - [ ] Auto compile and refresh on file save (maybe settings to control this behavior)
-- [ ] Syntax highlighting for bytecode/decompiler view
+- [x] Syntax highlighting for bytecode/decompiler view
 
 ## Tested on:
 * IntelliJ IDEA 2025.1.4.1+ (Community & Ultimate)
@@ -51,7 +51,7 @@ The project is a Work In Progress, with the following planned features:
 1. Install the plugin from the... Oh no, it's not published yet =(
 2. Open a project with Mixin usage.
 3. Open a class that is a Mixin target.
-4. Click the "Mixin Preview" button in the toolbar or use the shorcut `ALT-SHIFT-RIGHT` to open the Mixin Visualizer tab.
+4. Click the "Mixin Preview" button in the toolbar or use the shortcut `ALT-SHIFT-RIGHT` to open the Mixin Visualizer tab.
 5. Explore the transformed class in the new tab, using the Diff View to see changes.
 
 ---
