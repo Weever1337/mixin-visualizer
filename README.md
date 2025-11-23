@@ -35,8 +35,8 @@ The project is a Work In Progress, with the following planned features:
 - [ ] **Support 3rd party extensions:**
     - [ ] [MixinExtras](https://github.com/LlamaLad7/MixinExtras) (WrapOperation, etc.)
     - [ ] [MixinSquared](https://github.com/Bawnorton/MixinSquared) (button to see class transformed with MixinSquared)
-- [ ] Improve code structure and error handling (refactor transformer code, please)
-- [ ] Auto compile and refresh on file save (maybe settings to control this behavior)
+- [x] Improve code structure and error handling (refactor transformer code, please)
+- [x] Auto compile and refresh on file save (maybe settings to control this behavior)
 - [x] Syntax highlighting for bytecode/decompiler view
 
 ## Tested on:
