@@ -97,8 +97,8 @@ class MixinPreviewEditor(
         else
             JavaFileType.INSTANCE
 
-        val c1 = factory.create(original, fileType)
-        val c2 = factory.create(transformed, fileType)
+        val c1 = factory.create(project, original, fileType)
+        val c2 = factory.create(project, transformed, fileType)
 
         val request = SimpleDiffRequest("Mixin Diff", c1, c2, "Target (Original)", "Target (Injected)")
         diffPanel.setRequest(request)
