@@ -4,6 +4,7 @@ import com.intellij.diff.DiffContentFactory
 import com.intellij.diff.DiffManager
 import com.intellij.diff.requests.SimpleDiffRequest
 import com.intellij.icons.AllIcons
+import com.intellij.ide.highlighter.JavaFileType
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.*
@@ -12,6 +13,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiManager
 import com.intellij.ui.components.JBLoadingPanel
+import dev.wvr.mixinvisualizer.lang.BytecodeFileType
 import dev.wvr.mixinvisualizer.logic.MixinProcessor
 import java.awt.BorderLayout
 import java.beans.PropertyChangeListener
@@ -91,9 +93,9 @@ class MixinPreviewEditor(
         val factory = DiffContentFactory.getInstance()
 
         val fileType = if (showBytecode)
-            com.intellij.openapi.fileTypes.PlainTextFileType.INSTANCE
+            BytecodeFileType
         else
-            com.intellij.ide.highlighter.JavaFileType.INSTANCE
+            JavaFileType.INSTANCE
 
         val c1 = factory.create(original, fileType)
         val c2 = factory.create(transformed, fileType)
