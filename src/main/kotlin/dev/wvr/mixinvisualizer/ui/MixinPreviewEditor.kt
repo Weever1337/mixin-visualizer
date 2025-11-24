@@ -22,6 +22,7 @@ import java.awt.BorderLayout
 import java.beans.PropertyChangeListener
 import javax.swing.JComponent
 import javax.swing.JPanel
+import com.intellij.openapi.project.DumbService
 
 class MixinPreviewEditor(
     private val project: Project,
@@ -90,7 +91,9 @@ class MixinPreviewEditor(
         loadingPanel.startLoading()
 
         ApplicationManager.getApplication().executeOnPooledThread {
-            val (orig, trans) = processor.process(psi, showBytecode)
+            val (orig, trans) = DumbService.getInstance(project).runReadActionInSmartMode<Pair<String, String>> {
+                processor.process(psi, showBytecode)
+            }
 
             ApplicationManager.getApplication().invokeLater {
                 updateDiff(orig, trans)
