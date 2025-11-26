@@ -41,7 +41,7 @@ object TargetFinderUtils {
     fun findTargetMethodLike(classNode: ClassNode, ref: String): MethodNode? {
         if (ref.contains("(")) {
             val name = ref.substringBefore("(")
-            val desc = ref.substring(ref.indexOf("("))
+            val desc = ref.substringAfter("(")
             return classNode.methods.find { it.name == name && it.desc == desc }
         }
         return classNode.methods.find { it.name == ref }
@@ -52,13 +52,45 @@ object TargetFinderUtils {
         if (cleanRef.contains(";")) cleanRef = cleanRef.substringAfterLast(";")
         if (cleanRef.contains("(")) {
             val name = cleanRef.substringBefore("(")
-            val desc = cleanRef.substring(cleanRef.indexOf("("))
+            val desc = cleanRef.substringAfter("(")
             return insn.name == name && insn.desc == desc
         }
         return insn.name == cleanRef
     }
 
-    fun isMatchField(insn: FieldInsnNode, targetRef: String) = insn.name == targetRef
+    fun isMatchField(insn: FieldInsnNode, targetRef: String): Boolean {
+        var ref = targetRef
+
+        val colonIndex = ref.lastIndexOf(':')
+        var targetDesc: String? = null
+        if (colonIndex != -1) {
+            targetDesc = ref.substring(colonIndex + 1)
+            ref = ref.take(colonIndex)
+        }
+
+        var targetOwner: String? = null
+        val semiIndex = ref.lastIndexOf(';')
+        if (semiIndex != -1) {
+            var ownerPart = ref.take(semiIndex)
+            if (ownerPart.startsWith("L")) ownerPart = ownerPart.substring(1)
+            targetOwner = ownerPart
+            ref = ref.substring(semiIndex + 1)
+        } else {
+            val dotIndex = ref.lastIndexOf('.')
+            if (dotIndex != -1) {
+                targetOwner = ref.take(dotIndex).replace('.', '/')
+                ref = ref.substring(dotIndex + 1)
+            }
+        }
+
+        val targetName = ref
+
+        if (insn.name != targetName) return false
+        if (targetDesc != null && insn.desc != targetDesc) return false
+        if (targetOwner != null && insn.owner != targetOwner) return false
+
+        return true
+    }
 }
 
 object CodeGenerationUtils {

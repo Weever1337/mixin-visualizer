@@ -29,7 +29,7 @@ The project is a Work In Progress, with the following planned features:
 - [ ] **Handle Shadow members** (skip/validate them properly)
 - [ ] **Handle Priority & conflicts** (support `@Priority`)
 - [ ] **Handle super calls** (calls to mixin superclass methods)
-- [ ] **More @At targets** (support `FIELD`, `NEW`, etc.)
+- [x] **More @At targets** (support `FIELD`, `NEW`, etc.)
 - [x] **Static inits** (`<clinit>` merging)
 - [ ] **Exception handling** (try-catch blocks in injections)
 - [ ] **Support 3rd party extensions:**
