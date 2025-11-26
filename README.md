@@ -21,7 +21,7 @@ Currently, the plugin implements a custom ASM transformer supporting:
 
 More to see: [Mixin Documentation](https://github.com/SpongePowered/Mixin/wiki)
 
-## TODOs:
+## TODOs (todo: use Projects in GH):
 The project is a Work In Progress, with the following planned features:
 - [x] **Core transformation logic** (ASM-based)
 - [x] **UI features** (Editor tabs, Diff view, Toolbar)
@@ -39,6 +39,7 @@ The project is a Work In Progress, with the following planned features:
 - [x] **Syntax highlighting for bytecode/decompiler view**
 - [x] **Handle @Accessor and @Invoker**
 - [ ] **Fix variable names**
+- [ ] **Add mixin builder**
 
 ## Tested on:
 * IntelliJ IDEA 2025.1.4.1+ (Community & Ultimate)
