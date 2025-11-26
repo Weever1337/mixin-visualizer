@@ -32,13 +32,13 @@ dependencies {
         bundledPlugin("com.intellij.gradle")
         bundledPlugin("org.intellij.groovy")
 
-        plugins("com.demonwav.minecraft-dev:$mcdevIdeaVersion-$mcdevVersion")
+        plugins("com.demonwav.minecraft-dev:$mcdevIdeaVersion-$mcdevVersion") // todo: add requirement in plugins.xml
     }
 
-    implementation("org.ow2.asm:asm:9.6")
-    implementation("org.ow2.asm:asm-tree:9.6")
-    implementation("org.ow2.asm:asm-util:9.6")
-    implementation("org.vineflower:vineflower:1.10.1")
+    implementation("org.ow2.asm:asm:9.9")
+    implementation("org.ow2.asm:asm-tree:9.9")
+    implementation("org.ow2.asm:asm-util:9.9")
+    implementation("org.vineflower:vineflower:1.11.2")
 }
 
 intellijPlatform {

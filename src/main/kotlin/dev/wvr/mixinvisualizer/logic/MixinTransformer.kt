@@ -6,9 +6,7 @@ import dev.wvr.mixinvisualizer.logic.handlers.MixinHandler
 import dev.wvr.mixinvisualizer.logic.handlers.OverwriteHandler
 import dev.wvr.mixinvisualizer.logic.handlers.RedirectHandler
 import org.objectweb.asm.Opcodes
-import org.objectweb.asm.tree.ClassNode
-import org.objectweb.asm.tree.FieldNode
-import org.objectweb.asm.tree.MethodNode
+import org.objectweb.asm.tree.*
 
 class MixinTransformer {
     private val handlers: List<MixinHandler> = listOf(
@@ -23,6 +21,7 @@ class MixinTransformer {
         }
 
         mergeUniqueMembers(target, mixin)
+        mergeClinit(target, mixin)
 
         for (mixinMethod in mixin.methods) {
             val anns = mixinMethod.visibleAnnotations ?: continue
@@ -37,6 +36,51 @@ class MixinTransformer {
                     e.printStackTrace()
                 }
             }
+        }
+    }
+
+    private fun mergeClinit(target: ClassNode, mixin: ClassNode) {
+        val mixinClinit = mixin.methods.find { it.name == "<clinit>" } ?: return
+        var targetClinit = target.methods.find { it.name == "<clinit>" }
+
+        if (targetClinit == null) {
+            targetClinit = MethodNode(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null)
+            target.methods.add(targetClinit)
+            targetClinit.instructions.add(InsnNode(Opcodes.RETURN))
+        }
+
+        val code = AsmHelper.cloneInstructions(mixinClinit.instructions)
+        AsmHelper.remapMemberAccess(code, mixin.name, target.name)
+
+        var node = code.last
+        while (node != null) {
+            val prev = node.previous
+            if (node.opcode == Opcodes.RETURN) {
+                code.remove(node)
+            } else if (node.opcode != -1) {
+                break
+            }
+            node = prev
+        }
+
+        val offset = targetClinit.maxLocals
+        val iter = code.iterator()
+        while (iter.hasNext()) {
+            val insn = iter.next()
+            if (insn is VarInsnNode) {
+                insn.`var` += offset
+            } else if (insn is IincInsnNode) {
+                insn.`var` += offset
+            }
+        }
+        targetClinit.maxLocals += mixinClinit.maxLocals
+
+        val targetLast = targetClinit.instructions.last
+        if (targetLast != null && targetLast.opcode == Opcodes.RETURN) {
+            targetClinit.instructions.insertBefore(targetLast, code)
+        } else {
+            targetClinit.instructions.add(code)
+            targetClinit.instructions.add(InsnNode(Opcodes.RETURN))
         }
     }
 

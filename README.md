@@ -30,7 +30,7 @@ The project is a Work In Progress, with the following planned features:
 - [ ] **Handle Priority & conflicts** (support `@Priority`)
 - [ ] **Handle super calls** (calls to mixin superclass methods)
 - [ ] **More @At targets** (support `FIELD`, `NEW`, etc.)
-- [ ] **Static inits** (`<clinit>` merging)
+- [x] **Static inits** (`<clinit>` merging)
 - [ ] **Exception handling** (try-catch blocks in injections)
 - [ ] **Support 3rd party extensions:**
     - [ ] [MixinExtras](https://github.com/LlamaLad7/MixinExtras) (WrapOperation, etc.)
