@@ -94,6 +94,8 @@ class MixinTransformer {
 
     private fun mergeUniqueMembers(target: ClassNode, mixin: ClassNode) {
         for (field in mixin.fields) {
+            if (isShadow(field.visibleAnnotations)) continue
+
             if (target.fields.none { it.name == field.name && it.desc == field.desc }) {
                 val newAccess = (field.access and Opcodes.ACC_PRIVATE.inv()) or Opcodes.ACC_PUBLIC
                 target.fields.add(FieldNode(newAccess, field.name, field.desc, field.signature, field.value))
@@ -101,6 +103,8 @@ class MixinTransformer {
         }
 
         for (method in mixin.methods) {
+            if (isShadow(method.visibleAnnotations)) continue
+
             val anns = method.visibleAnnotations ?: emptyList()
             val isHandler = anns.any { ann -> handlers.any { it.canHandle(ann.desc) } }
 
@@ -119,5 +123,9 @@ class MixinTransformer {
                 }
             }
         }
+    }
+
+    private fun isShadow(annotations: List<AnnotationNode>?): Boolean {
+        return annotations?.any { it.desc.contains("Shadow") } == true
     }
 }

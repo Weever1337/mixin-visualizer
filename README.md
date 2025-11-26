@@ -26,7 +26,7 @@ The project is a Work In Progress, with the following planned features:
 - [x] **Core transformation logic** (ASM-based)
 - [x] **UI features** (Editor tabs, Diff view, Toolbar)
 - [x] **Bytecode/Decompiler toggle**
-- [ ] **Handle Shadow members** (skip/validate them properly)
+- [x] **Handle Shadow members** (skip/validate them properly)
 - [ ] **Handle Priority & conflicts** (support `@Priority`)
 - [ ] **Handle super calls** (calls to mixin superclass methods)
 - [x] **More @At targets** (support `FIELD`, `NEW`, etc.)
