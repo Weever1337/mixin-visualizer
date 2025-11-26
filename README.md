@@ -27,8 +27,7 @@ The project is a Work In Progress, with the following planned features:
 - [x] **UI features** (Editor tabs, Diff view, Toolbar)
 - [x] **Bytecode/Decompiler toggle**
 - [x] **Handle Shadow members** (skip/validate them properly)
-- [ ] **Handle Priority & conflicts** (support `@Priority`)
-- [ ] **Handle super calls** (calls to mixin superclass methods)
+- [ ] **Handle super calls**
 - [x] **More @At targets** (support `FIELD`, `NEW`, etc.)
 - [x] **Static inits** (`<clinit>` merging)
 - [x] **Exception handling** (try-catch blocks in injections)
@@ -38,8 +37,7 @@ The project is a Work In Progress, with the following planned features:
 - [x] **Improve code structure and error handling** (refactor transformer code, please)
 - [x] **Auto compile and refresh on file save** (maybe settings to control this behavior)
 - [x] **Syntax highlighting for bytecode/decompiler view**
-- [ ] **Handle @Accessors and more features from Mixins**
-- [ ] **Handle enums**
+- [x] **Handle @Accessor and @Invoker**
 - [ ] **Fix variable names**
 
 ## Tested on:

@@ -1,10 +1,7 @@
 package dev.wvr.mixinvisualizer.logic
 
 import dev.wvr.mixinvisualizer.logic.asm.AsmHelper
-import dev.wvr.mixinvisualizer.logic.handlers.InjectHandler
-import dev.wvr.mixinvisualizer.logic.handlers.MixinHandler
-import dev.wvr.mixinvisualizer.logic.handlers.OverwriteHandler
-import dev.wvr.mixinvisualizer.logic.handlers.RedirectHandler
+import dev.wvr.mixinvisualizer.logic.handlers.*
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.tree.*
 
@@ -12,7 +9,10 @@ class MixinTransformer {
     private val handlers: List<MixinHandler> = listOf(
         InjectHandler(),
         OverwriteHandler(),
-        RedirectHandler()
+        RedirectHandler(),
+
+        AccessorHandler(),
+        InvokerHandler()
     )
 
     fun transform(target: ClassNode, mixin: ClassNode) {
@@ -106,9 +106,13 @@ class MixinTransformer {
             if (isShadow(method.visibleAnnotations)) continue
 
             val anns = method.visibleAnnotations ?: emptyList()
-            val isHandler = anns.any { ann -> handlers.any { it.canHandle(ann.desc) } }
 
-            if (!isHandler && method.name != "<init>" && method.name != "<clinit>") {
+            val isInjector = anns.any { ann ->
+                val desc = ann.desc ?: ""
+                desc.contains("Inject") || desc.contains("Redirect") || desc.contains("Overwrite")
+            }
+
+            if (!isInjector && method.name != "<init>" && method.name != "<clinit>") {
                 if (target.methods.none { it.name == method.name && it.desc == method.desc }) {
                     val newMethod = MethodNode(
                         (method.access and Opcodes.ACC_PRIVATE.inv()) or Opcodes.ACC_PUBLIC,

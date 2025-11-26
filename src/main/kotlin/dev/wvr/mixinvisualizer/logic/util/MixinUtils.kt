@@ -6,6 +6,16 @@ import org.objectweb.asm.Type
 import org.objectweb.asm.tree.*
 
 object AnnotationUtils {
+    fun getValue(node: AnnotationNode, key: String): Any? {
+        val values = node.values ?: return null
+        for (i in 0 until values.size step 2) {
+            if (values[i] == key) {
+                return values[i + 1]
+            }
+        }
+        return null
+    }
+
     fun getListValue(node: AnnotationNode, key: String): List<String> {
         val values = node.values ?: return emptyList()
         for (i in 0 until values.size step 2) {
