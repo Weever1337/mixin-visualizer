@@ -24,7 +24,7 @@ class InjectHandler : MixinHandler {
 
         for (ref in targets) {
             val targetMethod = TargetFinderUtils.findTargetMethodLike(targetClass, ref) ?: continue
-            val injectionCode = CodeGenerationUtils.prepareCode(
+            val injectionData = CodeGenerationUtils.prepareCode(
                 sourceMethod,
                 mixinClass.name,
                 targetClass.name,
@@ -34,7 +34,8 @@ class InjectHandler : MixinHandler {
 
             when (atValue) {
                 "HEAD" -> {
-                    targetMethod.instructions.insert(injectionCode)
+                    targetMethod.instructions.insert(injectionData.instructions)
+                    targetMethod.tryCatchBlocks.addAll(injectionData.tryCatchBlocks)
                 }
 
                 "TAIL", "RETURN" -> {
@@ -42,7 +43,12 @@ class InjectHandler : MixinHandler {
                     while (iter.hasNext()) {
                         val insn = iter.next()
                         if (insn.opcode in Opcodes.IRETURN..Opcodes.RETURN) {
-                            targetMethod.instructions.insertBefore(insn, AsmHelper.cloneInstructions(injectionCode))
+                            val map = HashMap<LabelNode, LabelNode>()
+                            val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
+                            val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
+
+                            targetMethod.instructions.insertBefore(insn, code)
+                            targetMethod.tryCatchBlocks.addAll(tcbs)
                         }
                     }
                 }
@@ -54,9 +60,14 @@ class InjectHandler : MixinHandler {
                         while (iter.hasNext()) {
                             val insn = iter.next()
                             if (insn is MethodInsnNode && TargetFinderUtils.isMatch(insn, atTarget)) {
-                                val code = AsmHelper.cloneInstructions(injectionCode)
+                                val map = HashMap<LabelNode, LabelNode>()
+                                val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
+                                val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
+
                                 if (shift == "AFTER") targetMethod.instructions.insert(insn, code)
                                 else targetMethod.instructions.insertBefore(insn, code)
+
+                                targetMethod.tryCatchBlocks.addAll(tcbs)
                             }
                         }
                     }
@@ -74,9 +85,14 @@ class InjectHandler : MixinHandler {
                             if (insn is FieldInsnNode && TargetFinderUtils.isMatchField(insn, atTarget)) {
                                 if (targetOpcode != -1 && insn.opcode != targetOpcode) continue
 
-                                val code = AsmHelper.cloneInstructions(injectionCode)
+                                val map = HashMap<LabelNode, LabelNode>()
+                                val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
+                                val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
+
                                 if (shift == "AFTER") targetMethod.instructions.insert(insn, code)
                                 else targetMethod.instructions.insertBefore(insn, code)
+
+                                targetMethod.tryCatchBlocks.addAll(tcbs)
                             }
                         }
                     }
@@ -91,9 +107,14 @@ class InjectHandler : MixinHandler {
                             if (insn is TypeInsnNode && insn.opcode == Opcodes.NEW) {
                                 val normalizedTarget = atTarget.replace('.', '/')
                                 if (insn.desc == normalizedTarget) {
-                                    val code = AsmHelper.cloneInstructions(injectionCode)
+                                    val map = HashMap<LabelNode, LabelNode>()
+                                    val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
+                                    val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
+
                                     if (shift == "AFTER") targetMethod.instructions.insert(insn, code)
                                     else targetMethod.instructions.insertBefore(insn, code)
+
+                                    targetMethod.tryCatchBlocks.addAll(tcbs)
                                 }
                             }
                         }

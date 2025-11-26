@@ -1,5 +1,6 @@
 package dev.wvr.mixinvisualizer.logic.handlers
 
+import dev.wvr.mixinvisualizer.logic.asm.AsmHelper
 import dev.wvr.mixinvisualizer.logic.util.AnnotationUtils
 import dev.wvr.mixinvisualizer.logic.util.CodeGenerationUtils
 import dev.wvr.mixinvisualizer.logic.util.TargetFinderUtils
@@ -32,14 +33,21 @@ class RedirectHandler : MixinHandler {
                 }
 
                 if (match) {
-                    val injectionCode = CodeGenerationUtils.prepareCode(
+                    val injectionData = CodeGenerationUtils.prepareCode(
                         sourceMethod,
                         mixinClass.name,
                         targetClass.name,
                         targetMethod,
                         isRedirect = true
                     )
-                    targetMethod.instructions.insertBefore(insn, injectionCode)
+
+                    val map = HashMap<LabelNode, LabelNode>()
+                    val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
+                    val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
+
+                    targetMethod.instructions.insertBefore(insn, code)
+                    targetMethod.tryCatchBlocks.addAll(tcbs)
+
                     targetMethod.instructions.remove(insn)
                 }
             }

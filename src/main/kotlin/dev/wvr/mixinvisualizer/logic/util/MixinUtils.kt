@@ -93,6 +93,11 @@ object TargetFinderUtils {
     }
 }
 
+data class GeneratedCode(
+    val instructions: InsnList,
+    val tryCatchBlocks: List<TryCatchBlockNode>
+)
+
 object CodeGenerationUtils {
     private const val CALLBACK_INFO = "org/spongepowered/asm/mixin/injection/callback/CallbackInfo"
     private const val CALLBACK_INFO_RETURNABLE = "org/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable"
@@ -103,8 +108,11 @@ object CodeGenerationUtils {
         targetName: String,
         targetMethod: MethodNode,
         isRedirect: Boolean
-    ): InsnList {
-        val code = AsmHelper.cloneInstructions(source.instructions)
+    ): GeneratedCode {
+        val labelMap = HashMap<LabelNode, LabelNode>()
+        val code = AsmHelper.cloneInstructions(source.instructions, labelMap)
+        val tryCatchBlocks = AsmHelper.cloneTryCatchBlocks(source, labelMap)
+
         val offset = targetMethod.maxLocals + 5
 
         val sourceArgs = Type.getArgumentTypes(source.desc)
@@ -137,7 +145,7 @@ object CodeGenerationUtils {
 
         AsmHelper.cleanupReturnInstruction(code, !isRedirect)
 
-        return code
+        return GeneratedCode(code, tryCatchBlocks)
     }
 
     private fun findCallbackInfoVarIndex(method: MethodNode): Int {
