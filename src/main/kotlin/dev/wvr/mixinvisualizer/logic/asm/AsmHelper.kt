@@ -37,13 +37,14 @@ object AsmHelper {
         return size
     }
 
-    fun cleanupReturnInstruction(list: InsnList) {
+    fun cleanupReturnInstruction(list: InsnList, allowValueReturns: Boolean) {
         val endLabel = LabelNode()
         list.add(endLabel)
         var last = list.first
         while (last != null) {
-            val next = last.next
-            if (last.opcode in Opcodes.IRETURN..Opcodes.RETURN) {
+            val next = last.next // FIXME(!!): save link to next modifier
+
+            if (last.opcode == Opcodes.RETURN || (!allowValueReturns && last.opcode in Opcodes.IRETURN..Opcodes.RETURN)) {
                 list.set(last, JumpInsnNode(Opcodes.GOTO, endLabel))
             }
             last = next

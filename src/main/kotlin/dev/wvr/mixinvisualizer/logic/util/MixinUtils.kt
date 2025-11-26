@@ -1,6 +1,7 @@
 package dev.wvr.mixinvisualizer.logic.util
 
 import dev.wvr.mixinvisualizer.logic.asm.AsmHelper
+import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
 import org.objectweb.asm.tree.*
 
@@ -61,6 +62,9 @@ object TargetFinderUtils {
 }
 
 object CodeGenerationUtils {
+    private const val CALLBACK_INFO = "org/spongepowered/asm/mixin/injection/callback/CallbackInfo"
+    private const val CALLBACK_INFO_RETURNABLE = "org/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable"
+
     fun prepareCode(source: MethodNode, mixinName: String, targetName: String, targetMethod: MethodNode, isRedirect: Boolean): InsnList {
         val code = AsmHelper.cloneInstructions(source.instructions)
         val offset = targetMethod.maxLocals + 5
@@ -70,36 +74,164 @@ object CodeGenerationUtils {
 
         if (!isRedirect && sourceArgs.size > targetArgs.size) {
             val stubInit = InsnList()
-            val startArgIndex = AsmHelper.getArgsSize(targetMethod)
-            var currentSlotIndex = startArgIndex
+            val startSlot = AsmHelper.getArgsSize(targetMethod)
+            var currentSlotIndex = startSlot
             val startIndex = targetArgs.size
 
             for (i in startIndex until sourceArgs.size) {
                 val type = sourceArgs[i]
-                AsmHelper.generateDefaultValue(stubInit, type, currentSlotIndex + offset)
+                if (type.internalName != CALLBACK_INFO && type.internalName != CALLBACK_INFO_RETURNABLE) {
+                    AsmHelper.generateDefaultValue(stubInit, type, currentSlotIndex + offset)
+                }
                 currentSlotIndex += type.size
             }
             code.insert(stubInit)
         }
 
+        try {
+            val ciIndex = findCallbackInfoVarIndex(source)
+            processCallbackInfo(code, Type.getReturnType(targetMethod.desc), ciIndex)
+        } catch (_: Exception) {
+        }
+
         AsmHelper.remapMemberAccess(code, mixinName, targetName)
         remapLocalVariables(code, source, targetMethod, offset)
-        AsmHelper.cleanupReturnInstruction(code)
+
+        AsmHelper.cleanupReturnInstruction(code, !isRedirect)
 
         return code
     }
 
+    private fun findCallbackInfoVarIndex(method: MethodNode): Int {
+        val isStatic = (method.access and Opcodes.ACC_STATIC) != 0
+        var index = if (isStatic) 0 else 1
+        for (arg in Type.getArgumentTypes(method.desc)) {
+            if (arg.internalName == CALLBACK_INFO || arg.internalName == CALLBACK_INFO_RETURNABLE) {
+                return index
+            }
+            index += arg.size
+        }
+        return -1
+    }
+
+    private fun processCallbackInfo(insns: InsnList, targetReturnType: Type, ciVarIndex: Int) {
+        var node = insns.first
+        while (node != null) {
+            val next = node.next
+            if (node is MethodInsnNode) {
+                handleMethodCall(insns, node, targetReturnType, ciVarIndex)
+            }
+            node = next
+        }
+    }
+
+    private fun handleMethodCall(insns: InsnList, insn: MethodInsnNode, targetReturnType: Type, ciVarIndex: Int) {
+        if (insn.owner == CALLBACK_INFO && insn.name == "cancel" && insn.desc == "()V") {
+            removeCiLoadAndCall(insns, insn, ciVarIndex)
+            insns.insertBefore(insn, InsnNode(Opcodes.RETURN))
+            insns.remove(insn)
+        } else if (insn.owner == CALLBACK_INFO_RETURNABLE && insn.name == "setReturnValue") {
+            val args = Type.getArgumentTypes(insn.desc)
+            if (args.isNotEmpty()) {
+                val valueType = args[0]
+
+                val removedLoad = removeCiLoadIfPossible(insns, insn, ciVarIndex)
+
+                if (!removedLoad) {
+                    if (valueType.size == 1) {
+                        insns.insertBefore(insn, InsnNode(Opcodes.SWAP))
+                        insns.insertBefore(insn, InsnNode(Opcodes.POP))
+                    } else {
+                        insns.insertBefore(insn, InsnNode(Opcodes.DUP2_X1))
+                        insns.insertBefore(insn, InsnNode(Opcodes.POP2))
+                        insns.insertBefore(insn, InsnNode(Opcodes.POP))
+                    }
+                }
+
+                adjustType(insns, insn, targetReturnType)
+                insns.insertBefore(insn, InsnNode(targetReturnType.getOpcode(Opcodes.IRETURN)))
+                insns.remove(insn)
+            }
+        }
+    }
+
+    private fun removeCiLoadAndCall(insns: InsnList, callInsn: AbstractInsnNode, ciIndex: Int) {
+        val prev = callInsn.previous
+        if (prev is VarInsnNode && prev.opcode == Opcodes.ALOAD && prev.`var` == ciIndex) {
+            insns.remove(prev)
+        } else {
+            insns.insertBefore(callInsn, InsnNode(Opcodes.POP))
+        }
+    }
+
+    private fun removeCiLoadIfPossible(insns: InsnList, callInsn: AbstractInsnNode, ciIndex: Int): Boolean {
+        var current = callInsn.previous
+        var steps = 0
+        while (current != null && steps < 10) {
+            if (current is VarInsnNode && current.opcode == Opcodes.ALOAD && current.`var` == ciIndex) {
+                insns.remove(current)
+                return true
+            }
+            steps++
+            current = current.previous
+        }
+        return false
+    }
+
+    private fun adjustType(insns: InsnList, location: AbstractInsnNode, targetType: Type) {
+        if (targetType.sort != Type.OBJECT && targetType.sort != Type.ARRAY && targetType.sort != Type.VOID) {
+            val internalName = getWrapperInternalName(targetType)
+            val methodName = getUnboxMethodName(targetType)
+            val desc = "()" + targetType.descriptor
+
+            insns.insertBefore(location, TypeInsnNode(Opcodes.CHECKCAST, internalName))
+            insns.insertBefore(location, MethodInsnNode(Opcodes.INVOKEVIRTUAL, internalName, methodName, desc, false))
+        } else if (targetType.sort == Type.OBJECT || targetType.sort == Type.ARRAY) {
+            if (targetType.internalName != "java/lang/Object") {
+                insns.insertBefore(location, TypeInsnNode(Opcodes.CHECKCAST, targetType.internalName))
+            }
+        }
+    }
+
+    private fun getWrapperInternalName(type: Type): String {
+        return when (type.sort) {
+            Type.BOOLEAN -> "java/lang/Boolean"
+            Type.CHAR -> "java/lang/Character"
+            Type.BYTE -> "java/lang/Byte"
+            Type.SHORT -> "java/lang/Short"
+            Type.INT -> "java/lang/Integer"
+            Type.FLOAT -> "java/lang/Float"
+            Type.LONG -> "java/lang/Long"
+            Type.DOUBLE -> "java/lang/Double"
+            else -> "java/lang/Object"
+        }
+    }
+
+    private fun getUnboxMethodName(type: Type): String {
+        return when (type.sort) {
+            Type.BOOLEAN -> "booleanValue"
+            Type.CHAR -> "charValue"
+            Type.BYTE -> "byteValue"
+            Type.SHORT -> "shortValue"
+            Type.INT -> "intValue"
+            Type.FLOAT -> "floatValue"
+            Type.LONG -> "longValue"
+            Type.DOUBLE -> "doubleValue"
+            else -> "toString"
+        }
+    }
+
     private fun remapLocalVariables(insns: InsnList, source: MethodNode, target: MethodNode, offset: Int) {
-        val targetArgCount = AsmHelper.getArgsSize(target)
+        val targetArgSlotLimit = AsmHelper.getArgsSize(target)
         val iter = insns.iterator()
         while (iter.hasNext()) {
             val insn = iter.next()
             if (insn is VarInsnNode) {
-                if (insn.`var` >= targetArgCount) {
+                if (insn.`var` >= targetArgSlotLimit) {
                     insn.`var` += offset
                 }
             } else if (insn is IincInsnNode) {
-                if (insn.`var` >= targetArgCount) {
+                if (insn.`var` >= targetArgSlotLimit) {
                     insn.`var` += offset
                 }
             }
