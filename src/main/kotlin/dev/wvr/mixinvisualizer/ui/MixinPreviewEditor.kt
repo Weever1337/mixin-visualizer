@@ -7,6 +7,9 @@ import com.intellij.icons.AllIcons
 import com.intellij.ide.highlighter.JavaFileType
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.LogicalPosition
+import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.fileEditor.FileEditorState
 import com.intellij.openapi.project.DumbService
@@ -29,7 +32,6 @@ class MixinPreviewEditor(
     private val project: Project,
     private val file: VirtualFile
 ) : FileEditor {
-
     private val panel = JPanel(BorderLayout())
     private val loadingPanel = JBLoadingPanel(BorderLayout(), this)
     private val diffPanel = DiffManager.getInstance().createRequestPanel(project, this, null)
@@ -37,6 +39,9 @@ class MixinPreviewEditor(
     private val processor = MixinProcessor(project)
 
     private var showBytecode = false
+
+    private var pendingScrollTarget: String? = null
+    private var currentResultDocument: com.intellij.openapi.editor.Document? = null
 
     init {
         loadingPanel.add(diffPanel.component, BorderLayout.CENTER)
@@ -61,6 +66,11 @@ class MixinPreviewEditor(
         })
 
         refresh()
+    }
+
+    fun scrollToMethod(methodName: String) {
+        this.pendingScrollTarget = methodName
+        performScroll()
     }
 
     private fun createToolbar(): JComponent {
@@ -108,17 +118,46 @@ class MixinPreviewEditor(
         if (Disposer.isDisposed(diffPanel)) return
 
         val factory = DiffContentFactory.getInstance()
+        val fileType = if (showBytecode) BytecodeFileType else JavaFileType.INSTANCE
 
-        val fileType = if (showBytecode)
-            BytecodeFileType
-        else
-            JavaFileType.INSTANCE
+        val content1 = factory.create(project, original, fileType)
+        val content2 = factory.create(project, transformed, fileType)
 
-        val c1 = factory.create(project, original, fileType)
-        val c2 = factory.create(project, transformed, fileType)
+        this.currentResultDocument = content2.document
 
-        val request = SimpleDiffRequest("Mixin Diff", c1, c2, "Target (Original)", "Target (Injected)")
+        val request = SimpleDiffRequest("Mixin Diff", content1, content2, "Target (Original)", "Target (Injected)")
         diffPanel.setRequest(request)
+
+        ApplicationManager.getApplication().invokeLater {
+            performScroll()
+        }
+    }
+
+    private fun performScroll() {
+        val targetName = pendingScrollTarget ?: return
+        val doc = currentResultDocument ?: return
+
+        val text = doc.charsSequence
+        var idx = text.indexOf(" $targetName(")
+        if (idx == -1) idx = text.indexOf(" $targetName ")
+        if (idx == -1) idx = text.indexOf(targetName)
+
+        if (idx != -1) {
+            val editors = EditorFactory.getInstance().getEditors(doc, project)
+            for (editor in editors) {
+                if (!editor.isDisposed) {
+                    val offset = idx
+                    val line = doc.getLineNumber(offset)
+
+                    editor.caretModel.moveToOffset(offset)
+                    editor.scrollingModel.scrollTo(LogicalPosition(line, 0), ScrollType.CENTER)
+
+                    editor.selectionModel.setSelection(offset, offset + targetName.length)
+                }
+            }
+        }
+
+        pendingScrollTarget = null
     }
 
     override fun getFile() = file
