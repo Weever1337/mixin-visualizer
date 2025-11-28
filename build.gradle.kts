@@ -10,7 +10,7 @@ val mcdevVersion: String by project
 val mcdevIdeaVersion: String by project
 
 group = "dev.wvr"
-version = "0.1-alpha"
+version = "0.1"
 
 repositories {
     mavenCentral()
@@ -32,7 +32,7 @@ dependencies {
         bundledPlugin("com.intellij.gradle")
         bundledPlugin("org.intellij.groovy")
 
-        plugins("com.demonwav.minecraft-dev:$mcdevIdeaVersion-$mcdevVersion") // todo: add requirement in plugins.xml
+        plugins("com.demonwav.minecraft-dev:$mcdevIdeaVersion-$mcdevVersion")
     }
 
     implementation("org.ow2.asm:asm:9.9")
