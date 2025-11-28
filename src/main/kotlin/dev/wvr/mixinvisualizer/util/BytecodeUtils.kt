@@ -120,6 +120,8 @@ object BytecodeUtils {
         fernflower.addSource(File("$className.class"))
         fernflower.decompileContext()
 
-        return result.ifEmpty { "// Decompiled content was empty or class mismatch." }
+        return result
+            .replace(Regex("^\\s*// \\\$VF: synthetic method.*\\R", RegexOption.MULTILINE), "")
+            .ifEmpty { "// Decompiled content was empty or class mismatch." }
     }
 }
