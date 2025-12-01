@@ -1,4 +1,4 @@
-# Mixin Visualizer [UNSTABLE] <img src="src/main/resources/META-INF/pluginIcon.svg" width="150" alt="please change this logo in future" align="right">
+# Mixin Visualizer <img src="src/main/resources/META-INF/pluginIcon.svg" width="150" alt="please change this logo in future" align="right">
 **Mixin Visualizer** is an IntelliJ IDEA plugin that allows you to preview the effects of SpongePowered Mixins on target classes directly within the IDE.
 
 [![versiones](https://img.shields.io/jetbrains/plugin/v/29218-mixin-visualizer.svg)](https://plugins.jetbrains.com/plugin/29218-mixin-visualizer)
