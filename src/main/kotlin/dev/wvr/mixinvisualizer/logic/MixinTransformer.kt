@@ -7,6 +7,7 @@ import org.objectweb.asm.tree.*
 
 class MixinTransformer {
     private val handlers: List<MixinHandler> = listOf(
+        ModifyReturnValueHandler(),
         InjectHandler(),
         OverwriteHandler(),
         RedirectHandler(),
