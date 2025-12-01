@@ -1,6 +1,8 @@
 # Mixin Visualizer [UNSTABLE] <img src="src/main/resources/META-INF/pluginIcon.svg" width="150" alt="please change this logo in future" align="right">
 **Mixin Visualizer** is an IntelliJ IDEA plugin that allows you to preview the effects of SpongePowered Mixins on target classes directly within the IDE.
 
+[![versiones](https://img.shields.io/jetbrains/plugin/v/29218-mixin-visualizer.svg)](https://plugins.jetbrains.com/plugin/29218-mixin-visualizer)
+[![downloades](https://img.shields.io/jetbrains/plugin/d/29218-mixin-visualizer.svg)](https://plugins.jetbrains.com/plugin/29218-mixin-visualizer)
 > [License](LICENSE) | [CONTRIBUTING](CONTRIBUTING.md) | [Changelog](CHANGELOG.md)
 ---
 
@@ -50,7 +52,7 @@ The project is a Work In Progress, with the following planned features:
 * Mixin 0.8.7+
 
 ## Usage:
-1. Install the plugin from the... Oh no, it's not published yet =(
+1. Install the plugin from the JetBrains Marketplace
 2. Open a project with Mixin usage.
 3. Open a class that is a Mixin target.
 4. Click the "Mixin Preview" button in the toolbar or use the shortcut `ALT-SHIFT-RIGHT` to open the Mixin Visualizer tab.

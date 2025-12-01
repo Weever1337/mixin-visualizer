@@ -7,6 +7,7 @@
     IntelliJ IDEA plugin for visualizing Mixin injections in real-time using a side-by-side view
     ]]></description>
 
+    <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.java</depends>
     <depends>org.jetbrains.kotlin</depends>
     <depends>ByteCodeViewer</depends>
