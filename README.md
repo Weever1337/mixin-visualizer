@@ -52,7 +52,7 @@ The project is a Work In Progress, with the following planned features:
 * Mixin 0.8.7+
 
 ## Usage:
-1. Install the plugin from the JetBrains Marketplace
+1. Install the plugin from the [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/29218-mixin-visualizer)
 2. Open a project with Mixin usage.
 3. Open a class that is a Mixin target.
 4. Click the "Mixin Preview" button in the toolbar or use the shortcut `ALT-SHIFT-RIGHT` to open the Mixin Visualizer tab.
