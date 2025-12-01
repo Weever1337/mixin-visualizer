@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "2.1.0"
-    id("org.jetbrains.intellij.platform") version "2.7.1"
+    id("org.jetbrains.intellij.platform") version "2.10.4"
 }
 
 val mcdevVersion: String by project
@@ -22,7 +22,7 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        create("IC", "2025.1.4.1")
+        create("IC", "2025.1.5")
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
 
         bundledPlugin("com.intellij.java")

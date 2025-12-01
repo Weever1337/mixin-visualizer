@@ -7,7 +7,6 @@
     IntelliJ IDEA plugin for visualizing Mixin injections in real-time using a side-by-side view
     ]]></description>
 
-
     <depends>com.intellij.java</depends>
     <depends>org.jetbrains.kotlin</depends>
     <depends>ByteCodeViewer</depends>
@@ -15,6 +14,10 @@
     <depends>com.intellij.gradle</depends>
     <depends>org.intellij.groovy</depends>
     <depends>com.demonwav.minecraft-dev</depends>
+
+    <extensions defaultExtensionNs="org.jetbrains.kotlin">
+        <supportsKotlinPluginMode supportsK2="true"/>
+    </extensions>
 
     <extensions defaultExtensionNs="com.intellij">
         <fileEditorProvider implementation="dev.wvr.mixinvisualizer.ui.MixinPreviewFileEditorProvider"/>
