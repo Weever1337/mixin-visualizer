@@ -67,21 +67,20 @@ class ModifyReturnValueHandler : MixinHandler {
                                 Opcodes.ARETURN -> list.add(VarInsnNode(Opcodes.ALOAD, lvIndex))
                             }
 
-                            //use returnvalue of handler/mixin instead of the original
-                            val returnType = Type.getReturnType(targetMethod.desc)
-                            val handlerDesc = "(${returnType.descriptor})${returnType.descriptor}"
-                            list.add(
-                                MethodInsnNode(
-                                    Opcodes.INVOKEVIRTUAL,
-                                    mixinClass.name.replace('.', '/'), //generate the üath for the handler/mixin class
-                                    ref,
-                                    handlerDesc,
-                                    false
-                                )
-                            )
+
+                            targetMethod.instructions.insertBefore(insn, list)
+
+                            val iteratorius = sourceMethod.instructions.iterator()
+                            while(iteratorius.hasNext())
+                            {
+
+                                println(iteratorius.next().opcode)
+                                targetMethod.instructions.insertBefore(insn,iteratorius.next())
+                            }
 
                             //return based on type
-                            list.add(when (insn.opcode) {
+                            val e = InsnList()
+                            e.add(when (insn.opcode) {
                                 Opcodes.IRETURN -> InsnNode(Opcodes.IRETURN)
                                 Opcodes.LRETURN -> InsnNode(Opcodes.LRETURN)
                                 Opcodes.FRETURN -> InsnNode(Opcodes.FRETURN)
@@ -89,9 +88,7 @@ class ModifyReturnValueHandler : MixinHandler {
                                 Opcodes.ARETURN -> InsnNode(Opcodes.ARETURN)
                                 else -> throw IllegalStateException("Unexpected return opcode ${insn.opcode}")
                             })
-
                             targetMethod.instructions.insertBefore(insn, list)
-                            targetMethod.instructions.remove(insn)
                         }
                     }
                 }
