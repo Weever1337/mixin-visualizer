@@ -61,6 +61,32 @@ object AsmHelper {
         }
     }
 
+    // skips this(...) delegation
+    fun findSuperCall(ctor: MethodNode, superName: String?): MethodInsnNode? {
+        var insn = ctor.instructions.first
+        while (insn != null) {
+            if (insn is MethodInsnNode && insn.opcode == Opcodes.INVOKESPECIAL && insn.name == "<init>" &&
+                (superName == null || insn.owner == superName)
+            ) {
+                return insn
+            }
+            insn = insn.next
+        }
+        return null
+    }
+
+    fun stripMixinAnnotations(method: MethodNode) {
+        method.visibleAnnotations?.removeIf { isMixinAnnotationDesc(it.desc) }
+        method.invisibleAnnotations?.removeIf { isMixinAnnotationDesc(it.desc) }
+        method.visibleParameterAnnotations?.forEach { it?.removeIf { ann -> isMixinAnnotationDesc(ann.desc) } }
+        method.invisibleParameterAnnotations?.forEach { it?.removeIf { ann -> isMixinAnnotationDesc(ann.desc) } }
+    }
+
+    private fun isMixinAnnotationDesc(desc: String?): Boolean {
+        return desc != null &&
+                (desc.startsWith("Lorg/spongepowered/asm/mixin") || desc.startsWith("Lcom/llamalad7/mixinextras"))
+    }
+
     fun getArgsSize(method: MethodNode): Int {
         val isStatic = (method.access and Opcodes.ACC_STATIC) != 0
         var size = if (isStatic) 0 else 1
@@ -83,7 +109,11 @@ object AsmHelper {
     }
 
     fun generateDefaultValue(list: InsnList, type: Type, varIndex: Int) {
-        val opStore = type.getOpcode(Opcodes.ISTORE)
+        pushDefaultValue(list, type)
+        list.add(VarInsnNode(type.getOpcode(Opcodes.ISTORE), varIndex))
+    }
+
+    fun pushDefaultValue(list: InsnList, type: Type) {
         when (type.sort) {
             Type.BOOLEAN, Type.CHAR, Type.BYTE, Type.SHORT, Type.INT -> list.add(InsnNode(Opcodes.ICONST_0))
             Type.FLOAT -> list.add(InsnNode(Opcodes.FCONST_0))
@@ -91,6 +121,26 @@ object AsmHelper {
             Type.DOUBLE -> list.add(InsnNode(Opcodes.DCONST_0))
             else -> list.add(InsnNode(Opcodes.ACONST_NULL))
         }
-        list.add(VarInsnNode(opStore, varIndex))
+    }
+
+    fun stashStack(list: InsnList, types: List<Type>, method: MethodNode): IntArray {
+        val slots = IntArray(types.size)
+        var base = method.maxLocals
+        for (i in types.indices) {
+            slots[i] = base
+            base += types[i].size
+        }
+        method.maxLocals = base
+
+        for (i in types.indices.reversed()) {
+            list.add(VarInsnNode(types[i].getOpcode(Opcodes.ISTORE), slots[i]))
+        }
+        return slots
+    }
+
+    fun unstashStack(list: InsnList, types: List<Type>, slots: IntArray) {
+        for (i in types.indices) {
+            list.add(VarInsnNode(types[i].getOpcode(Opcodes.ILOAD), slots[i]))
+        }
     }
 }

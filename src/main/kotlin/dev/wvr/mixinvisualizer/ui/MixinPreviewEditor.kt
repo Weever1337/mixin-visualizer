@@ -8,12 +8,12 @@ import com.intellij.ide.highlighter.JavaFileType
 import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.fileEditor.FileEditorState
-import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
@@ -28,6 +28,7 @@ import dev.wvr.mixinvisualizer.logic.MixinCompilationTopic
 import dev.wvr.mixinvisualizer.logic.MixinProcessor
 import java.awt.BorderLayout
 import java.beans.PropertyChangeListener
+import java.util.concurrent.atomic.AtomicLong
 import javax.swing.JComponent
 import javax.swing.JPanel
 
@@ -46,9 +47,15 @@ class MixinPreviewEditor(
     private var isDirty = true
 
     private var showBytecode = false
+    private var applyAllMixins = false
+    private var compactDiff = false
 
     private var pendingScrollTarget: String? = null
-    private var currentResultDocument: com.intellij.openapi.editor.Document? = null
+    private var currentResultDocument: Document? = null
+
+    private val refreshGeneration = AtomicLong(0)
+    private var lastShownContent: Pair<String, String>? = null
+    private var lastShownMode: Triple<Boolean, Boolean, Boolean>? = null
 
     init {
         loadingPanel.add(diffPanel.component, BorderLayout.CENTER)
@@ -122,8 +129,28 @@ class MixinPreviewEditor(
             }
         }
 
+        val allMixinsAction = object :
+            ToggleAction("All Mixins", "Apply every project mixin targeting this class (priority order)", AllIcons.Actions.GroupBy) {
+            override fun isSelected(e: AnActionEvent) = applyAllMixins
+            override fun setSelected(e: AnActionEvent, state: Boolean) {
+                applyAllMixins = state
+                scheduleRefresh(immediate = true)
+            }
+        }
+
+        val compactAction = object :
+            ToggleAction("Compact Diff", "Show only the methods affected by the mixin", AllIcons.Actions.Collapseall) {
+            override fun isSelected(e: AnActionEvent) = compactDiff
+            override fun setSelected(e: AnActionEvent, state: Boolean) {
+                compactDiff = state
+                scheduleRefresh(immediate = true)
+            }
+        }
+
         group.add(refreshAction)
         group.add(toggleAction)
+        group.add(allMixinsAction)
+        group.add(compactAction)
 
         val toolbar = ActionManager.getInstance().createActionToolbar("MixinVisualizerToolbar", group, true)
         toolbar.targetComponent = diffPanel.component
@@ -132,23 +159,33 @@ class MixinPreviewEditor(
 
     private fun refresh() {
         if (project.isDisposed || !file.isValid) return
-        val psi = PsiManager.getInstance(project).findFile(file) ?: return
 
         isDirty = false
         loadingPanel.startLoading()
 
-        ApplicationManager.getApplication().executeOnPooledThread {
-            if (project.isDisposed) return@executeOnPooledThread
+        val generation = refreshGeneration.incrementAndGet()
+        val bytecodeMode = showBytecode
+        val allMixins = applyAllMixins
+        val compact = compactDiff
 
-            val (orig, trans) = DumbService.getInstance(project).runReadActionInSmartMode<Pair<String, String>> {
-                processor.process(psi, showBytecode)
-            }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (project.isDisposed || generation != refreshGeneration.get()) return@executeOnPooledThread
+
+            val result = processor.process(file, bytecodeMode, allMixins, compact)
 
             ApplicationManager.getApplication().invokeLater({
-                if (!project.isDisposed) {
-                    updateDiff(orig, trans)
-                    loadingPanel.stopLoading()
+                if (project.isDisposed) return@invokeLater
+                if (generation != refreshGeneration.get()) return@invokeLater
+
+                val mode = Triple(bytecodeMode, allMixins, compact)
+                if (result != lastShownContent || mode != lastShownMode) {
+                    lastShownContent = result
+                    lastShownMode = mode
+                    updateDiff(result.first, result.second)
+                } else {
+                    performScroll()
                 }
+                loadingPanel.stopLoading()
             }, ModalityState.defaultModalityState())
         }
     }
@@ -164,7 +201,8 @@ class MixinPreviewEditor(
 
         this.currentResultDocument = content2.document
 
-        val request = SimpleDiffRequest("Mixin Diff", content1, content2, "Target (Original)", "Target (Injected)")
+        val injectedTitle = if (applyAllMixins) "Target (All Mixins Injected)" else "Target (Injected)"
+        val request = SimpleDiffRequest("Mixin Diff", content1, content2, "Target (Original)", injectedTitle)
         diffPanel.setRequest(request)
 
         performScroll()

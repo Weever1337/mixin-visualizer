@@ -6,6 +6,8 @@ import org.objectweb.asm.Type
 import org.objectweb.asm.tree.*
 
 object AnnotationUtils {
+    fun simpleName(desc: String): String = desc.substringAfterLast('/').removeSuffix(";")
+
     fun getValue(node: AnnotationNode, key: String): Any? {
         val values = node.values ?: return null
         for (i in 0 until values.size step 2) {
@@ -54,24 +56,47 @@ object AnnotationUtils {
 }
 
 object TargetFinderUtils {
-    fun findTargetMethodLike(classNode: ClassNode, ref: String): MethodNode? {
-        if (ref.contains("(")) {
-            val name = ref.substringBefore("(")
-            val desc = ref.substringAfter("(")
-            return classNode.methods.find { it.name == name && it.desc == desc }
+    fun parseMethodRef(rawRef: String): Triple<String?, String, String?>? {
+        var ref = rawRef.trim()
+        if (ref.isEmpty()) return null
+
+        var desc: String? = null
+        val parenIdx = ref.indexOf('(')
+        if (parenIdx != -1) {
+            desc = ref.substring(parenIdx)
+            ref = ref.substring(0, parenIdx)
         }
-        return classNode.methods.find { it.name == ref }
+
+        var owner: String? = null
+        val semiIdx = ref.indexOf(';')
+        if (semiIdx != -1) {
+            var ownerPart = ref.substring(0, semiIdx)
+            if (ownerPart.startsWith("L")) ownerPart = ownerPart.substring(1)
+            owner = ownerPart.replace('.', '/')
+            ref = ref.substring(semiIdx + 1)
+        } else {
+            val dotIdx = ref.lastIndexOf('.')
+            if (dotIdx != -1) {
+                owner = ref.substring(0, dotIdx).replace('.', '/')
+                ref = ref.substring(dotIdx + 1)
+            }
+        }
+
+        if (ref.isEmpty()) return null
+        return Triple(owner, ref, desc)
+    }
+
+    fun findTargetMethodLike(classNode: ClassNode, ref: String): MethodNode? {
+        val (_, name, desc) = parseMethodRef(ref) ?: return null
+        return classNode.methods.find { it.name == name && (desc == null || it.desc == desc) }
     }
 
     fun isMatch(insn: MethodInsnNode, targetRef: String): Boolean {
-        var cleanRef = targetRef
-        if (cleanRef.contains(";")) cleanRef = cleanRef.substringAfterLast(";")
-        if (cleanRef.contains("(")) {
-            val name = cleanRef.substringBefore("(")
-            val desc = cleanRef.substringAfter("(")
-            return insn.name == name && insn.desc == desc
-        }
-        return insn.name == cleanRef
+        val (owner, name, desc) = parseMethodRef(targetRef) ?: return false
+        if (insn.name != name) return false
+        if (desc != null && insn.desc != desc) return false
+        if (owner != null && insn.owner != owner) return false
+        return true
     }
 
     fun isMatchField(insn: FieldInsnNode, targetRef: String): Boolean {
@@ -114,6 +139,67 @@ data class GeneratedCode(
     val tryCatchBlocks: List<TryCatchBlockNode>
 )
 
+object LocalsSupport {
+    fun paramAnnotation(method: MethodNode, paramIndex: Int, simpleName: String): AnnotationNode? {
+        method.visibleParameterAnnotations?.getOrNull(paramIndex)
+            ?.find { AnnotationUtils.simpleName(it.desc) == simpleName }?.let { return it }
+        method.invisibleParameterAnnotations?.getOrNull(paramIndex)
+            ?.find { AnnotationUtils.simpleName(it.desc) == simpleName }?.let { return it }
+        return null
+    }
+
+    fun resolveLocalSlot(targetMethod: MethodNode, type: Type, ann: AnnotationNode): Int? {
+        val index = AnnotationUtils.getValue(ann, "index") as? Int ?: -1
+        if (index >= 0) return index
+
+        val candidates = targetMethod.localVariables
+            ?.filter { it.desc == type.descriptor }
+            ?.sortedBy { it.index }
+            ?: return null
+
+        val ordinal = AnnotationUtils.getValue(ann, "ordinal") as? Int ?: -1
+        return candidates.getOrNull(if (ordinal >= 0) ordinal else 0)?.index
+    }
+
+    fun shareFieldLoad(targetClass: ClassNode, ann: AnnotationNode, type: Type): FieldInsnNode {
+        val id = AnnotationUtils.getValue(ann, "value") as? String ?: "shared"
+        val name = "visor\$share\$" + id.replace(Regex("[^A-Za-z0-9_]"), "_")
+
+        if (targetClass.fields.none { it.name == name }) {
+            targetClass.fields.add(
+                FieldNode(Opcodes.ACC_PRIVATE or Opcodes.ACC_STATIC, name, type.descriptor, null, null)
+            )
+        }
+        return FieldInsnNode(Opcodes.GETSTATIC, targetClass.name, name, type.descriptor)
+    }
+
+    fun pushExtraArg(
+        list: InsnList,
+        source: MethodNode,
+        paramIndex: Int,
+        type: Type,
+        targetClass: ClassNode,
+        targetMethod: MethodNode
+    ) {
+        val localAnn = paramAnnotation(source, paramIndex, "Local")
+        if (localAnn != null) {
+            val slot = resolveLocalSlot(targetMethod, type, localAnn)
+            if (slot != null) {
+                list.add(VarInsnNode(type.getOpcode(Opcodes.ILOAD), slot))
+                return
+            }
+        }
+
+        val shareAnn = paramAnnotation(source, paramIndex, "Share")
+        if (shareAnn != null) {
+            list.add(shareFieldLoad(targetClass, shareAnn, type))
+            return
+        }
+
+        AsmHelper.pushDefaultValue(list, type)
+    }
+}
+
 object CodeGenerationUtils {
     private const val CALLBACK_INFO = "org/spongepowered/asm/mixin/injection/callback/CallbackInfo"
     private const val CALLBACK_INFO_RETURNABLE = "org/spongepowered/asm/mixin/injection/callback/CallbackInfoReturnable"
@@ -121,7 +207,7 @@ object CodeGenerationUtils {
     fun prepareCode(
         source: MethodNode,
         mixinName: String,
-        targetName: String,
+        targetClass: ClassNode,
         targetMethod: MethodNode,
         isRedirect: Boolean
     ): GeneratedCode {
@@ -134,22 +220,6 @@ object CodeGenerationUtils {
         val sourceArgs = Type.getArgumentTypes(source.desc)
         val targetArgs = Type.getArgumentTypes(targetMethod.desc)
 
-        if (!isRedirect && sourceArgs.size > targetArgs.size) {
-            val stubInit = InsnList()
-            val startSlot = AsmHelper.getArgsSize(targetMethod)
-            var currentSlotIndex = startSlot
-            val startIndex = targetArgs.size
-
-            for (i in startIndex until sourceArgs.size) {
-                val type = sourceArgs[i]
-                if (type.internalName != CALLBACK_INFO && type.internalName != CALLBACK_INFO_RETURNABLE) {
-                    AsmHelper.generateDefaultValue(stubInit, type, currentSlotIndex + offset)
-                }
-                currentSlotIndex += type.size
-            }
-            code.insert(stubInit)
-        }
-
         AsmHelper.cleanupReturnInstruction(code, !isRedirect)
 
         try {
@@ -158,8 +228,24 @@ object CodeGenerationUtils {
         } catch (_: Exception) {
         }
 
-        AsmHelper.remapMemberAccess(code, mixinName, targetName)
+        AsmHelper.remapMemberAccess(code, mixinName, targetClass.name)
         remapLocalVariables(code, source, targetMethod, offset, labelMap)
+
+        if (!isRedirect && sourceArgs.size > targetArgs.size) {
+            val stubInit = InsnList()
+            var currentSlotIndex = AsmHelper.getArgsSize(targetMethod)
+            val startIndex = targetArgs.size
+
+            for (i in startIndex until sourceArgs.size) {
+                val type = sourceArgs[i]
+                if (type.internalName != CALLBACK_INFO && type.internalName != CALLBACK_INFO_RETURNABLE) {
+                    LocalsSupport.pushExtraArg(stubInit, source, i, type, targetClass, targetMethod)
+                    stubInit.add(VarInsnNode(type.getOpcode(Opcodes.ISTORE), currentSlotIndex + offset))
+                }
+                currentSlotIndex += type.size
+            }
+            code.insert(stubInit)
+        }
 
         return GeneratedCode(code, tryCatchBlocks)
     }
@@ -304,15 +390,18 @@ object CodeGenerationUtils {
         labelMap: Map<LabelNode, LabelNode>
     ) {
         val targetArgSlotLimit = AsmHelper.getArgsSize(target)
+        val sourceArgSlotLimit = AsmHelper.getArgsSize(source)
+        val boundary = minOf(targetArgSlotLimit, sourceArgSlotLimit)
+
         val iter = insns.iterator()
         while (iter.hasNext()) {
             val insn = iter.next()
             if (insn is VarInsnNode) {
-                if (insn.`var` >= targetArgSlotLimit) {
+                if (insn.`var` >= boundary) {
                     insn.`var` += offset
                 }
             } else if (insn is IincInsnNode) {
-                if (insn.`var` >= targetArgSlotLimit) {
+                if (insn.`var` >= boundary) {
                     insn.`var` += offset
                 }
             }
@@ -323,17 +412,13 @@ object CodeGenerationUtils {
                 target.localVariables = ArrayList()
             }
             for (lvn in source.localVariables) {
-                if (lvn.index < targetArgSlotLimit) continue
+                if (lvn.index < boundary) continue
 
                 val newStart = labelMap[lvn.start]
                 val newEnd = labelMap[lvn.end]
                 if (newStart != null && newEnd != null) {
-                    var newIndex = lvn.index
-                    if (newIndex >= targetArgSlotLimit) {
-                        newIndex += offset
-                    }
                     target.localVariables.add(
-                        LocalVariableNode(lvn.name, lvn.desc, lvn.signature, newStart, newEnd, newIndex)
+                        LocalVariableNode(lvn.name, lvn.desc, lvn.signature, newStart, newEnd, lvn.index + offset)
                     )
                 }
             }
@@ -348,11 +433,11 @@ object SliceHelper {
         targetMethod: MethodNode,
         annotationNode: AnnotationNode
     ): Pair<AbstractInsnNode?, AbstractInsnNode?> {
-        val sliceList = AnnotationUtils.getListValue(annotationNode, "slice")
-        val sliceNode = if (sliceList.isNotEmpty()) {
-            sliceList.firstOrNull() as? AnnotationNode
-        } else {
-            null
+        val raw = AnnotationUtils.getValue(annotationNode, "slice")
+        val sliceNode = when (raw) {
+            is AnnotationNode -> raw
+            is List<*> -> raw.firstOrNull() as? AnnotationNode
+            else -> null
         } ?: return targetMethod.instructions.first to targetMethod.instructions.last
 
         val fromAnnotation = AnnotationUtils.getValue(sliceNode, "from") as? AnnotationNode
@@ -364,6 +449,27 @@ object SliceHelper {
         return startNode to endNode
     }
 
+    fun filterBySlice(
+        targetClass: ClassNode,
+        targetMethod: MethodNode,
+        annotationNode: AnnotationNode,
+        candidates: List<AbstractInsnNode>
+    ): List<AbstractInsnNode> {
+        if (AnnotationUtils.getValue(annotationNode, "slice") == null) return candidates
+        val (start, end) = getSliceRange(targetClass, targetMethod, annotationNode)
+
+        val inRange = HashSet<AbstractInsnNode>()
+        var started = (start == null)
+        var p = targetMethod.instructions.first
+        while (p != null) {
+            if (p === start) started = true
+            if (started) inRange.add(p)
+            if (p === end) break
+            p = p.next
+        }
+        return candidates.filter { it in inRange }
+    }
+
     private fun findSelector(
         owner: ClassNode,
         method: MethodNode,
@@ -371,16 +477,30 @@ object SliceHelper {
     ): AbstractInsnNode? {
         val value = AnnotationUtils.getValue(at, "value")
         val target = AnnotationUtils.getValue(at, "target")
+        val targetStr = when (target) {
+            is String -> target
+            is List<*> -> target.firstOrNull()?.toString() ?: ""
+            else -> ""
+        }
+
+        if (value == "HEAD") return method.instructions.first
+        if (value == "TAIL") {
+            var insn = method.instructions.last
+            while (insn != null && insn.opcode !in Opcodes.IRETURN..Opcodes.RETURN) insn = insn.previous
+            return insn
+        }
 
         val iter = method.instructions.iterator()
         while (iter.hasNext()) {
             val insn = iter.next()
             when (value) {
-                "HEAD" -> return method.instructions.first
-                "RETURN", "TAIL" -> if (insn.opcode in Opcodes.IRETURN..Opcodes.RETURN) {
-                    return insn
-                }
-                "INVOKE" -> if (insn is MethodInsnNode && TargetFinderUtils.isMatch(insn, target as String)) return insn
+                "RETURN" -> if (insn.opcode in Opcodes.IRETURN..Opcodes.RETURN) return insn
+                "INVOKE" -> if (insn is MethodInsnNode && targetStr.isNotEmpty() &&
+                    TargetFinderUtils.isMatch(insn, targetStr)
+                ) return insn
+                "FIELD" -> if (insn is FieldInsnNode && targetStr.isNotEmpty() &&
+                    TargetFinderUtils.isMatchField(insn, targetStr)
+                ) return insn
             }
         }
 

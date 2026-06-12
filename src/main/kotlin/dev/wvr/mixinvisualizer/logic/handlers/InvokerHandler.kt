@@ -7,7 +7,8 @@ import org.objectweb.asm.tree.*
 import java.util.*
 
 class InvokerHandler : MixinHandler {
-    override fun canHandle(annotationDesc: String): Boolean = annotationDesc.contains("Invoker")
+    override fun canHandle(annotationDesc: String): Boolean =
+        AnnotationUtils.simpleName(annotationDesc) == "Invoker"
 
     override fun handle(
         targetClass: ClassNode,

@@ -2,13 +2,12 @@ package dev.wvr.mixinvisualizer.logic
 
 import dev.wvr.mixinvisualizer.logic.asm.AsmHelper
 import dev.wvr.mixinvisualizer.logic.handlers.*
-import org.jetbrains.kotlin.idea.refactoring.inline.codeInliner.CommentHolder
+import dev.wvr.mixinvisualizer.logic.util.AnnotationUtils
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.tree.*
 
 class MixinTransformer {
     private val handlers: List<MixinHandler> = listOf(
-        ModifyReturnValueHandler(),
         InjectHandler(),
         OverwriteHandler(),
         RedirectHandler(),
@@ -18,24 +17,24 @@ class MixinTransformer {
         ModifyVariableHandler(),
 
         AccessorHandler(),
-        InvokerHandler()
+        InvokerHandler(),
+
+        ModifyReturnValueHandler(),
+        ModifyExpressionValueHandler(),
+        ModifyReceiverHandler(),
+        WrapOperationHandler(),
+        WrapWithConditionHandler(),
+        WrapMethodHandler()
     )
 
     fun transform(target: ClassNode, mixin: ClassNode) {
-//        if (target.fields.none { it.name == "__mixin_fields_here__" }) {
-//            target.fields.add(
-//                FieldNode(
-//                    Opcodes.ACC_PUBLIC,
-//                    "__mixin_fields_here__",
-//                    "Ljava/lang/String;",
-//                    null,
-//                    "Applied: ${mixin.name}"
-//                )
-//            )
-//        }
-
         mergeUniqueMembers(target, mixin)
         mergeClinit(target, mixin)
+        try {
+            mergeFieldInitializers(target, mixin)
+        } catch (e: Exception) {
+            System.err.println("Failed to merge mixin field initializers from ${mixin.name}: ${e.message}")
+        }
 
         for (mixinMethod in mixin.methods) {
             val anns = mixinMethod.visibleAnnotations ?: continue
@@ -98,6 +97,55 @@ class MixinTransformer {
         }
     }
 
+    private fun mergeFieldInitializers(target: ClassNode, mixin: ClassNode) {
+        val mixinCtor = mixin.methods.find { it.name == "<init>" && it.desc == "()V" } ?: return
+        val superCall = AsmHelper.findSuperCall(mixinCtor, mixin.superName) ?: return
+
+        val labels = HashMap<LabelNode, LabelNode>()
+        var p: AbstractInsnNode? = superCall.next
+        while (p != null) {
+            if (p is LabelNode) labels[p] = LabelNode()
+            p = p.next
+        }
+        val tail = InsnList()
+        var insn: AbstractInsnNode? = superCall.next
+        while (insn != null) {
+            tail.add(insn.clone(labels))
+            insn = insn.next
+        }
+
+        var last = tail.last
+        while (last != null) {
+            val prev = last.previous
+            if (last.opcode == Opcodes.RETURN) tail.remove(last)
+            else if (last.opcode != -1) break
+            last = prev
+        }
+
+        if (tail.toArray().none { it.opcode != -1 }) return
+
+        AsmHelper.remapMemberAccess(tail, mixin.name, target.name)
+
+        for (ctor in target.methods) {
+            if (ctor.name != "<init>") continue
+            val targetSuper = AsmHelper.findSuperCall(ctor, target.superName) ?: continue
+
+            val map = HashMap<LabelNode, LabelNode>()
+            val code = AsmHelper.cloneInstructions(tail, map)
+
+            val offset = ctor.maxLocals
+            val iter = code.iterator()
+            while (iter.hasNext()) {
+                val i = iter.next()
+                if (i is VarInsnNode && i.`var` >= 1) i.`var` += offset
+                else if (i is IincInsnNode && i.`var` >= 1) i.`var` += offset
+            }
+            ctor.maxLocals += mixinCtor.maxLocals
+
+            ctor.instructions.insert(targetSuper, code)
+        }
+    }
+
     private fun mergeUniqueMembers(target: ClassNode, mixin: ClassNode) {
         for (field in mixin.fields) {
             if (isShadow(field.visibleAnnotations)) continue
@@ -114,8 +162,7 @@ class MixinTransformer {
             val anns = method.visibleAnnotations ?: emptyList()
 
             val isInjector = anns.any { ann ->
-                val desc = ann.desc ?: ""
-                desc.contains("Inject") || desc.contains("Redirect") || desc.contains("Overwrite")
+                AnnotationUtils.simpleName(ann.desc ?: "") in INLINED_INJECTORS
             }
 
             if (!isInjector && method.name != "<init>" && method.name != "<clinit>") {
@@ -129,6 +176,7 @@ class MixinTransformer {
                     )
                     method.accept(newMethod)
                     AsmHelper.remapMemberAccess(newMethod.instructions, mixin.name, target.name)
+                    AsmHelper.stripMixinAnnotations(newMethod)
                     target.methods.add(newMethod)
                 }
             }
@@ -137,5 +185,9 @@ class MixinTransformer {
 
     private fun isShadow(annotations: List<AnnotationNode>?): Boolean {
         return annotations?.any { it.desc.contains("Shadow") } == true
+    }
+
+    companion object {
+        private val INLINED_INJECTORS = setOf("Inject", "Redirect", "Overwrite")
     }
 }

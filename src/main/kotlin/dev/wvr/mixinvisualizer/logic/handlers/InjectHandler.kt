@@ -3,12 +3,14 @@ package dev.wvr.mixinvisualizer.logic.handlers
 import dev.wvr.mixinvisualizer.logic.asm.AsmHelper
 import dev.wvr.mixinvisualizer.logic.util.AnnotationUtils
 import dev.wvr.mixinvisualizer.logic.util.CodeGenerationUtils
+import dev.wvr.mixinvisualizer.logic.util.SliceHelper
 import dev.wvr.mixinvisualizer.logic.util.TargetFinderUtils
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.tree.*
 
 class InjectHandler : MixinHandler {
-    override fun canHandle(annotationDesc: String): Boolean = annotationDesc.contains("Inject")
+    override fun canHandle(annotationDesc: String): Boolean =
+        AnnotationUtils.simpleName(annotationDesc) == "Inject"
 
     override fun handle(
         targetClass: ClassNode,
@@ -24,125 +26,81 @@ class InjectHandler : MixinHandler {
 
         for (ref in targets) {
             val targetMethod = TargetFinderUtils.findTargetMethodLike(targetClass, ref) ?: continue
-            //val (startNode, endNode) = SliceHelper.getSliceRange(targetClass, targetMethod, annotation)
 
             val injectionData = CodeGenerationUtils.prepareCode(
                 sourceMethod,
                 mixinClass.name,
-                targetClass.name,
+                targetClass,
                 targetMethod,
                 isRedirect = false
             )
 
-            when (atValue) {
+            val shift = AnnotationUtils.getAtValue(annotation, "shift")
+            val insertAfter = shift == "AFTER"
+            val ordinal = AnnotationUtils.getAtValue(annotation, "ordinal").toIntOrNull() ?: -1
+
+            var points: List<AbstractInsnNode> = when (atValue) {
                 "HEAD" -> {
-                    targetMethod.instructions.insert(injectionData.instructions)
-                    targetMethod.tryCatchBlocks.addAll(injectionData.tryCatchBlocks)
+                    val first = if (targetMethod.name == "<init>") {
+                        AsmHelper.findSuperCall(targetMethod, targetClass.superName)?.next
+                            ?: targetMethod.instructions.first
+                    } else {
+                        targetMethod.instructions.first
+                    }
+                    listOfNotNull(first)
                 }
 
-                "RETURN" -> {
-                    val returnNodes = mutableListOf<AbstractInsnNode>()
-                    val iter = targetMethod.instructions.iterator()
-                    while (iter.hasNext()) {
-                        val insn = iter.next()
-                        if (insn.opcode in Opcodes.IRETURN..Opcodes.RETURN) {
-                            returnNodes.add(insn)
-                        }
-                    }
-
-                    for (insn in returnNodes) {
-                        val map = HashMap<LabelNode, LabelNode>()
-                        val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
-                        val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
-
-                        targetMethod.instructions.insertBefore(insn, code)
-                        targetMethod.tryCatchBlocks.addAll(tcbs)
-                    }
-                }
+                "RETURN" -> targetMethod.instructions.toArray()
+                    .filter { it.opcode in Opcodes.IRETURN..Opcodes.RETURN }
 
                 "TAIL" -> {
                     var insn = targetMethod.instructions.last
-                    while (insn != null) {
-                        if (insn.opcode in Opcodes.IRETURN..Opcodes.RETURN) {
-                            val map = HashMap<LabelNode, LabelNode>()
-                            val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
-                            val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
-
-                            targetMethod.instructions.insertBefore(insn, code)
-                            targetMethod.tryCatchBlocks.addAll(tcbs)
-                            break
-                        }
+                    while (insn != null && insn.opcode !in Opcodes.IRETURN..Opcodes.RETURN) {
                         insn = insn.previous
                     }
+                    listOfNotNull(insn)
                 }
 
-                "INVOKE" -> {
-                    if (atTarget.isNotEmpty()) {
-                        val shift = AnnotationUtils.getAtValue(annotation, "shift")
-                        val iter = targetMethod.instructions.iterator()
-                        while (iter.hasNext()) {
-                            val insn = iter.next()
-                            if (insn is MethodInsnNode && TargetFinderUtils.isMatch(insn, atTarget)) {
-                                val map = HashMap<LabelNode, LabelNode>()
-                                val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
-                                val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
+                "INVOKE" -> if (atTarget.isEmpty()) emptyList() else targetMethod.instructions.toArray()
+                    .filter { it is MethodInsnNode && TargetFinderUtils.isMatch(it, atTarget) }
 
-                                if (shift == "AFTER") targetMethod.instructions.insert(insn, code)
-                                else targetMethod.instructions.insertBefore(insn, code)
-
-                                targetMethod.tryCatchBlocks.addAll(tcbs)
-                            }
-                        }
+                "FIELD" -> if (atTarget.isEmpty()) emptyList() else {
+                    val targetOpcode = AnnotationUtils.getAtValue(annotation, "opcode").toIntOrNull() ?: -1
+                    targetMethod.instructions.toArray().filter {
+                        it is FieldInsnNode && TargetFinderUtils.isMatchField(it, atTarget) &&
+                                (targetOpcode == -1 || it.opcode == targetOpcode)
                     }
                 }
 
-                "FIELD" -> {
-                    if (atTarget.isNotEmpty()) {
-                        val shift = AnnotationUtils.getAtValue(annotation, "shift")
-                        val opcodeVal = AnnotationUtils.getAtValue(annotation, "opcode")
-                        val targetOpcode = opcodeVal.toIntOrNull() ?: -1
-
-                        val iter = targetMethod.instructions.iterator()
-                        while (iter.hasNext()) {
-                            val insn = iter.next()
-                            if (insn is FieldInsnNode && TargetFinderUtils.isMatchField(insn, atTarget)) {
-                                if (targetOpcode != -1 && insn.opcode != targetOpcode) continue
-
-                                val map = HashMap<LabelNode, LabelNode>()
-                                val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
-                                val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
-
-                                if (shift == "AFTER") targetMethod.instructions.insert(insn, code)
-                                else targetMethod.instructions.insertBefore(insn, code)
-
-                                targetMethod.tryCatchBlocks.addAll(tcbs)
-                            }
-                        }
-                    }
+                "NEW" -> if (atTarget.isEmpty()) emptyList() else {
+                    val normalizedTarget = atTarget.replace('.', '/')
+                    targetMethod.instructions.toArray()
+                        .filter { it is TypeInsnNode && it.opcode == Opcodes.NEW && it.desc == normalizedTarget }
                 }
 
-                "NEW" -> {
-                    if (atTarget.isNotEmpty()) {
-                        val shift = AnnotationUtils.getAtValue(annotation, "shift")
-                        val iter = targetMethod.instructions.iterator()
-                        while (iter.hasNext()) {
-                            val insn = iter.next()
-                            if (insn is TypeInsnNode && insn.opcode == Opcodes.NEW) {
-                                val normalizedTarget = atTarget.replace('.', '/')
-                                if (insn.desc == normalizedTarget) {
-                                    val map = HashMap<LabelNode, LabelNode>()
-                                    val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
-                                    val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
+                else -> emptyList()
+            }
 
-                                    if (shift == "AFTER") targetMethod.instructions.insert(insn, code)
-                                    else targetMethod.instructions.insertBefore(insn, code)
+            if (atValue == "RETURN" || atValue == "INVOKE" || atValue == "FIELD" || atValue == "NEW") {
+                points = SliceHelper.filterBySlice(targetClass, targetMethod, annotation, points)
+            }
 
-                                    targetMethod.tryCatchBlocks.addAll(tcbs)
-                                }
-                            }
-                        }
-                    }
+            if (ordinal >= 0 && atValue != "HEAD" && atValue != "TAIL") {
+                points = listOfNotNull(points.getOrNull(ordinal))
+            }
+
+            for (insn in points) {
+                val map = HashMap<LabelNode, LabelNode>()
+                val code = AsmHelper.cloneInstructions(injectionData.instructions, map)
+                val tcbs = AsmHelper.cloneTryCatchBlocks(injectionData.tryCatchBlocks, map)
+
+                val afterAllowed = atValue == "INVOKE" || atValue == "FIELD" || atValue == "NEW"
+                if (afterAllowed && insertAfter) {
+                    targetMethod.instructions.insert(insn, code)
+                } else {
+                    targetMethod.instructions.insertBefore(insn, code)
                 }
+                targetMethod.tryCatchBlocks.addAll(tcbs)
             }
         }
     }

@@ -14,6 +14,10 @@ class MixinLineMarkerProvider : LineMarkerProvider {
     companion object {
         const val MIXIN_EDITOR_ID = "mixin-vis-editor"
         private const val MIXIN_PACKAGE = "org.spongepowered.asm.mixin"
+        private const val MIXIN_EXTRAS_PACKAGE = "com.llamalad7.mixinextras"
+
+        private fun isMixinAnnotationName(qName: String): Boolean =
+            qName.startsWith(MIXIN_PACKAGE) || qName.startsWith(MIXIN_EXTRAS_PACKAGE)
     }
 
     override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
@@ -75,14 +79,14 @@ class MixinLineMarkerProvider : LineMarkerProvider {
 
     private fun hasMixinAnnotation(method: PsiMethod): Boolean {
         val anns = method.modifierList.annotations
-        return anns.any { it.qualifiedName?.startsWith(MIXIN_PACKAGE) == true }
+        return anns.any { it.qualifiedName?.let(::isMixinAnnotationName) == true }
     }
 
     private fun extractTargetMethodName(method: PsiMethod): String? {
         val annotations = method.modifierList.annotations
         for (ann in annotations) {
             val qName = ann.qualifiedName ?: continue
-            if (!qName.startsWith(MIXIN_PACKAGE)) continue
+            if (!isMixinAnnotationName(qName)) continue
 
             if (qName.endsWith(".Overwrite")) {
                 return method.name
