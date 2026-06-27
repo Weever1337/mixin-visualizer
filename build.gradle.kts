@@ -50,6 +50,10 @@ dependencies {
     implementation("org.ow2.asm:asm-tree:9.9")
     implementation("org.ow2.asm:asm-util:9.9")
     implementation("org.vineflower:vineflower:1.11.2")
+
+    testImplementation("junit:junit:4.13.2")
+    testCompileOnly("org.spongepowered:mixin:0.8.7") { isTransitive = false }
+    testCompileOnly("io.github.llamalad7:mixinextras-common:0.5.4") { isTransitive = false }
 }
 
 intellijPlatform {
