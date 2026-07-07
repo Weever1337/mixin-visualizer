@@ -136,7 +136,8 @@ object TargetFinderUtils {
 
 data class GeneratedCode(
     val instructions: InsnList,
-    val tryCatchBlocks: List<TryCatchBlockNode>
+    val tryCatchBlocks: List<TryCatchBlockNode>,
+    val offset: Int
 )
 
 object LocalsSupport {
@@ -229,7 +230,12 @@ object CodeGenerationUtils {
         }
 
         AsmHelper.remapMemberAccess(code, mixinName, targetClass.name)
-        remapLocalVariables(code, source, targetMethod, offset, labelMap)
+        val boundary = if (isRedirect) {
+            if ((source.access and Opcodes.ACC_STATIC) != 0) 0 else 1
+        } else {
+            minOf(AsmHelper.getArgsSize(targetMethod), AsmHelper.getArgsSize(source))
+        }
+        remapLocalVariables(code, source, targetMethod, offset, labelMap, boundary)
 
         if (!isRedirect && sourceArgs.size > targetArgs.size) {
             val stubInit = InsnList()
@@ -247,7 +253,7 @@ object CodeGenerationUtils {
             code.insert(stubInit)
         }
 
-        return GeneratedCode(code, tryCatchBlocks)
+        return GeneratedCode(code, tryCatchBlocks, offset)
     }
 
     private fun findCallbackInfoVarIndex(method: MethodNode): Int {
@@ -387,12 +393,9 @@ object CodeGenerationUtils {
         source: MethodNode,
         target: MethodNode,
         offset: Int,
-        labelMap: Map<LabelNode, LabelNode>
+        labelMap: Map<LabelNode, LabelNode>,
+        boundary: Int
     ) {
-        val targetArgSlotLimit = AsmHelper.getArgsSize(target)
-        val sourceArgSlotLimit = AsmHelper.getArgsSize(source)
-        val boundary = minOf(targetArgSlotLimit, sourceArgSlotLimit)
-
         val iter = insns.iterator()
         while (iter.hasNext()) {
             val insn = iter.next()

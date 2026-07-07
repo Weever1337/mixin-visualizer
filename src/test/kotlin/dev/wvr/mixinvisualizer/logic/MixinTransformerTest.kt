@@ -14,6 +14,32 @@ import org.objectweb.asm.tree.analysis.BasicVerifier
 
 class MixinTransformerTest {
     @Test
+    fun redirectCallKeepsReceiver() {
+        val code = apply("RedirectCall")
+        assertFalse(code.contains("<unknown>"))
+        assertContains(code, "helper.hashCode() > 0")
+    }
+
+    @Test
+    fun redirectStaticHandler() {
+        val code = apply("RedirectStatic")
+        assertFalse(code.contains("this + 1000"))
+        assertContains(code, "+ 1000")
+    }
+
+    @Test
+    fun redirectCapturesTargetArgs() {
+        assertContains(apply("RedirectCapture"), "+ mult")
+    }
+
+    @Test
+    fun redirectFieldWrite() {
+        val code = apply("RedirectField")
+        assertContains(code, "this.counter + 20")
+        assertContains(code, "System.out.println(")
+    }
+
+    @Test
     fun injectHead() {
         val code = apply("InjectHead")
         assertContains(code, "System.out.println(\"head\");")

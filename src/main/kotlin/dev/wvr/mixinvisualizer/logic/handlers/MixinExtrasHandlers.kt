@@ -68,9 +68,10 @@ internal object MixinExtrasSupport {
         val atTarget = AnnotationUtils.getAtValue(annotation, "target")
         if (atTarget.isEmpty()) return emptyList()
 
+        val opcode = AnnotationUtils.getAtValue(annotation, "opcode").toIntOrNull() ?: -1
         var all = targetMethod.instructions.toArray().filter { insn ->
             (insn is MethodInsnNode && TargetFinderUtils.isMatch(insn, atTarget)) ||
-                    (insn is FieldInsnNode && TargetFinderUtils.isMatchField(insn, atTarget))
+                    (insn is FieldInsnNode && TargetFinderUtils.isMatchField(insn, atTarget) && (opcode == -1 || insn.opcode == opcode))
         }
 
         all = SliceHelper.filterBySlice(targetClass, targetMethod, annotation, all)

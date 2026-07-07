@@ -113,6 +113,20 @@ object AsmHelper {
         list.add(VarInsnNode(type.getOpcode(Opcodes.ISTORE), varIndex))
     }
 
+    fun pushArgOrDefault(list: InsnList, method: MethodNode, index: Int, type: Type) {
+        val args = Type.getArgumentTypes(method.desc)
+        val arg = args.getOrNull(index)
+        if (arg == null || (arg != type && !(isReference(arg) && isReference(type)))) {
+            pushDefaultValue(list, type)
+            return
+        }
+        var slot = if ((method.access and Opcodes.ACC_STATIC) != 0) 0 else 1
+        for (i in 0 until index) slot += args[i].size
+        list.add(VarInsnNode(type.getOpcode(Opcodes.ILOAD), slot))
+    }
+
+    private fun isReference(type: Type) = type.sort == Type.OBJECT || type.sort == Type.ARRAY
+
     fun pushDefaultValue(list: InsnList, type: Type) {
         when (type.sort) {
             Type.BOOLEAN, Type.CHAR, Type.BYTE, Type.SHORT, Type.INT -> list.add(InsnNode(Opcodes.ICONST_0))
