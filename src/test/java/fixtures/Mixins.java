@@ -12,12 +12,71 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Overwrite;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
+import org.spongepowered.asm.mixin.injection.ModifyConstant;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 public class Mixins {
+    @Mixin(Target.class)
+    public static class ConstantInt {
+        @ModifyConstant(method = "tick", constant = @Constant(intValue = 20))
+        private int moreCounter(int original) {
+            return 40;
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class ConstantFloat {
+        @ModifyConstant(method = "speed", constant = @Constant(floatValue = 0.5F))
+        private float half(float original) {
+            return original / 2;
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class ConstantByType {
+        @ModifyConstant(method = "getValue")
+        private int anyInt(int original) {
+            return original + 1;
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class VariableByOrdinal {
+        @ModifyVariable(method = "getValue", at = @At("STORE"), ordinal = 1)
+        private int bumpResult(int result) {
+            return result + 1;
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class VariableByName {
+        @ModifyVariable(method = "getValue", at = @At("STORE"), name = "s")
+        private String shout(String s) {
+            return s + "!";
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class VariableHeadArg {
+        @ModifyVariable(method = "speed", at = @At("HEAD"), argsOnly = true)
+        private float doubleBase(float base) {
+            return base * 2;
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class VariableAmbiguous {
+        @ModifyVariable(method = "getValue", at = @At("STORE"))
+        private int ambiguous(int value) {
+            return value;
+        }
+    }
+
     @Mixin(Target.class)
     public static class RedirectCall {
         @Redirect(method = "tick", at = @At(value = "INVOKE", target = "Lfixtures/Target$Helper;isReady()Z"))

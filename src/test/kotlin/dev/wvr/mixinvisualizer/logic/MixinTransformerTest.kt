@@ -40,6 +40,47 @@ class MixinTransformerTest {
     }
 
     @Test
+    fun modifyConstantByValue() {
+        val code = apply("ConstantInt")
+        assertContains(code, "this.moreCounter(20)")
+        assertContains(code, "local = 5;")
+    }
+
+    @Test
+    fun modifyConstantFloat() {
+        assertContains(apply("ConstantFloat"), "this.half(0.5F)")
+    }
+
+    @Test
+    fun modifyConstantByType() {
+        assertContains(apply("ConstantByType"), "this.anyInt(2)")
+    }
+
+    @Test
+    fun modifyVariableByOrdinal() {
+        val code = apply("VariableByOrdinal")
+        assertContains(code, "result = this.bumpResult(result);")
+        assertFalse(code.contains("(int)s"))
+    }
+
+    @Test
+    fun modifyVariableByName() {
+        assertContains(apply("VariableByName"), "s = this.shout(s);")
+    }
+
+    @Test
+    fun modifyVariableHeadArg() {
+        val code = apply("VariableHeadArg")
+        assertContains(code, "base = this.doubleBase(base);")
+        assertTrue(code.indexOf("this.doubleBase(base)") < code.indexOf("base * 0.5F"))
+    }
+
+    @Test
+    fun modifyVariableAmbiguousIsSkipped() {
+        assertFalse(apply("VariableAmbiguous").contains("this.ambiguous("))
+    }
+
+    @Test
     fun injectHead() {
         val code = apply("InjectHead")
         assertContains(code, "System.out.println(\"head\");")

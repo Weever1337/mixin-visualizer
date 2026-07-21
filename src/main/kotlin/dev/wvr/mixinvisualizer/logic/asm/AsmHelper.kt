@@ -61,6 +61,11 @@ object AsmHelper {
         }
     }
 
+    fun headInsn(targetClass: ClassNode, method: MethodNode): AbstractInsnNode? {
+        if (method.name != "<init>") return method.instructions.first
+        return findSuperCall(method, targetClass.superName)?.next ?: method.instructions.first
+    }
+
     // skips this(...) delegation
     fun findSuperCall(ctor: MethodNode, superName: String?): MethodInsnNode? {
         var insn = ctor.instructions.first
