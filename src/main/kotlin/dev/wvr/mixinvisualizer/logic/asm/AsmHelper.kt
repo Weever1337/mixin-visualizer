@@ -111,6 +111,10 @@ object AsmHelper {
             }
             last = next
         }
+
+        var tail = endLabel.previous
+        while (tail != null && tail.opcode == -1) tail = tail.previous
+        if (tail is JumpInsnNode && tail.opcode == Opcodes.GOTO && tail.label === endLabel) list.remove(tail)
     }
 
     fun generateDefaultValue(list: InsnList, type: Type, varIndex: Int) {
@@ -121,7 +125,7 @@ object AsmHelper {
     fun pushArgOrDefault(list: InsnList, method: MethodNode, index: Int, type: Type) {
         val args = Type.getArgumentTypes(method.desc)
         val arg = args.getOrNull(index)
-        if (arg == null || (arg != type && !(isReference(arg) && isReference(type)))) {
+        if (arg == null || !isCompatible(arg, type)) {
             pushDefaultValue(list, type)
             return
         }
@@ -129,6 +133,8 @@ object AsmHelper {
         for (i in 0 until index) slot += args[i].size
         list.add(VarInsnNode(type.getOpcode(Opcodes.ILOAD), slot))
     }
+
+    fun isCompatible(from: Type, to: Type) = from == to || (isReference(from) && isReference(to))
 
     private fun isReference(type: Type) = type.sort == Type.OBJECT || type.sort == Type.ARRAY
 

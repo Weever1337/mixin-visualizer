@@ -149,6 +149,9 @@ object LocalsSupport {
         return null
     }
 
+    fun isSugar(method: MethodNode, paramIndex: Int): Boolean =
+        paramAnnotation(method, paramIndex, "Local") != null || paramAnnotation(method, paramIndex, "Share") != null
+
     fun resolveLocalSlot(targetMethod: MethodNode, type: Type, ann: AnnotationNode): Int? {
         val index = AnnotationUtils.getValue(ann, "index") as? Int ?: -1
         if (index >= 0) return index
@@ -210,119 +213,251 @@ object CodeGenerationUtils {
         mixinName: String,
         targetClass: ClassNode,
         targetMethod: MethodNode,
-        isRedirect: Boolean
+        isRedirect: Boolean,
+        captureReturn: Boolean = false,
+        capturedLocals: List<LocalVariableNode> = emptyList()
     ): GeneratedCode {
         val labelMap = HashMap<LabelNode, LabelNode>()
         val code = AsmHelper.cloneInstructions(source.instructions, labelMap)
         val tryCatchBlocks = AsmHelper.cloneTryCatchBlocks(source, labelMap)
 
         val offset = targetMethod.maxLocals + 5
+        val returnType = Type.getReturnType(targetMethod.desc)
+        val hasValue = returnType.sort != Type.VOID
+        val retSlot = source.maxLocals
+        val flagSlot = source.maxLocals + 2
+        val ciIndex = findCallbackInfoVarIndex(source)
 
         val sourceArgs = Type.getArgumentTypes(source.desc)
         val targetArgs = Type.getArgumentTypes(targetMethod.desc)
+        val thisSlots = if ((source.access and Opcodes.ACC_STATIC) != 0) 0 else 1
+        val capturesArgs = sourceArgs.size >= targetArgs.size && targetArgs.indices.all { sourceArgs[it] == targetArgs[it] }
 
         AsmHelper.cleanupReturnInstruction(code, !isRedirect)
 
-        try {
-            val ciIndex = findCallbackInfoVarIndex(source)
-            processCallbackInfo(code, Type.getReturnType(targetMethod.desc), ciIndex)
-        } catch (_: Exception) {
-        }
+        val usesFlag = !isRedirect && processCallbackInfo(code, returnType, ciIndex, retSlot, flagSlot, captureReturn)
+        val ciStillUsed = ciIndex >= 0 && code.toArray().any { it is VarInsnNode && it.`var` == ciIndex }
 
         AsmHelper.remapMemberAccess(code, mixinName, targetClass.name)
-        val boundary = if (isRedirect) {
-            if ((source.access and Opcodes.ACC_STATIC) != 0) 0 else 1
-        } else {
-            minOf(AsmHelper.getArgsSize(targetMethod), AsmHelper.getArgsSize(source))
+        val boundary = if (!isRedirect && capturesArgs) AsmHelper.getArgsSize(targetMethod) else thisSlots
+        val unusedCi = if (ciIndex >= 0 && !ciStillUsed) setOf(ciIndex) else emptySet()
+        remapLocalVariables(code, source, targetMethod, offset, labelMap, boundary, unusedCi)
+
+        val prologue = InsnList()
+        if (captureReturn && hasValue) {
+            prologue.add(VarInsnNode(returnType.getOpcode(Opcodes.ISTORE), retSlot + offset))
+        } else if (usesFlag && hasValue) {
+            AsmHelper.generateDefaultValue(prologue, returnType, retSlot + offset)
         }
-        remapLocalVariables(code, source, targetMethod, offset, labelMap, boundary)
+        if (usesFlag) {
+            prologue.add(InsnNode(Opcodes.ICONST_0))
+            prologue.add(VarInsnNode(Opcodes.ISTORE, flagSlot + offset))
+        }
 
-        if (!isRedirect && sourceArgs.size > targetArgs.size) {
-            val stubInit = InsnList()
-            var currentSlotIndex = AsmHelper.getArgsSize(targetMethod)
-            val startIndex = targetArgs.size
-
-            for (i in startIndex until sourceArgs.size) {
+        if (!isRedirect) {
+            var slot = thisSlots
+            var captureIndex = 0
+            val firstExtra = if (capturesArgs) targetArgs.size else 0
+            for (i in sourceArgs.indices) {
                 val type = sourceArgs[i]
-                if (type.internalName != CALLBACK_INFO && type.internalName != CALLBACK_INFO_RETURNABLE) {
-                    LocalsSupport.pushExtraArg(stubInit, source, i, type, targetClass, targetMethod)
-                    stubInit.add(VarInsnNode(type.getOpcode(Opcodes.ISTORE), currentSlotIndex + offset))
+                if (i >= firstExtra) {
+                    if (isCallbackInfo(type)) {
+                        if (ciStillUsed) {
+                            prologue.add(InsnNode(Opcodes.ACONST_NULL))
+                            prologue.add(VarInsnNode(Opcodes.ASTORE, slot + offset))
+                        }
+                    } else {
+                        if (LocalsSupport.isSugar(source, i)) {
+                            LocalsSupport.pushExtraArg(prologue, source, i, type, targetClass, targetMethod)
+                        } else {
+                            val local = capturedLocals.getOrNull(captureIndex++)
+                            if (local != null && AsmHelper.isCompatible(Type.getType(local.desc), type)) {
+                                prologue.add(VarInsnNode(type.getOpcode(Opcodes.ILOAD), local.index))
+                            } else {
+                                AsmHelper.pushDefaultValue(prologue, type)
+                            }
+                        }
+                        prologue.add(VarInsnNode(type.getOpcode(Opcodes.ISTORE), slot + offset))
+                    }
                 }
-                currentSlotIndex += type.size
+                slot += type.size
             }
-            code.insert(stubInit)
+        }
+        code.insert(prologue)
+
+        if (usesFlag) {
+            val skip = LabelNode()
+            code.add(VarInsnNode(Opcodes.ILOAD, flagSlot + offset))
+            code.add(JumpInsnNode(Opcodes.IFEQ, skip))
+            if (hasValue) code.add(VarInsnNode(returnType.getOpcode(Opcodes.ILOAD), retSlot + offset))
+            code.add(InsnNode(returnType.getOpcode(Opcodes.IRETURN)))
+            code.add(skip)
+        }
+        if (captureReturn && hasValue) {
+            code.add(VarInsnNode(returnType.getOpcode(Opcodes.ILOAD), retSlot + offset))
         }
 
         return GeneratedCode(code, tryCatchBlocks, offset)
     }
 
+    private fun isCallbackInfo(type: Type) =
+        type.sort == Type.OBJECT && (type.internalName == CALLBACK_INFO || type.internalName == CALLBACK_INFO_RETURNABLE)
+
     private fun findCallbackInfoVarIndex(method: MethodNode): Int {
         val isStatic = (method.access and Opcodes.ACC_STATIC) != 0
         var index = if (isStatic) 0 else 1
         for (arg in Type.getArgumentTypes(method.desc)) {
-            if (arg.internalName == CALLBACK_INFO || arg.internalName == CALLBACK_INFO_RETURNABLE) {
-                return index
-            }
+            if (isCallbackInfo(arg)) return index
             index += arg.size
         }
         return -1
     }
 
-    private fun processCallbackInfo(insns: InsnList, targetReturnType: Type, ciVarIndex: Int) {
+    private fun processCallbackInfo(
+        insns: InsnList,
+        returnType: Type,
+        ciIndex: Int,
+        retSlot: Int,
+        flagSlot: Int,
+        captureReturn: Boolean
+    ): Boolean {
+        val end = insns.last as? LabelNode ?: return false
+        val hasValue = returnType.sort != Type.VOID
+        var usesFlag = false
+
         var node = insns.first
         while (node != null) {
-            val next = node.next
-            if (node is MethodInsnNode) {
-                handleMethodCall(insns, node, targetReturnType, ciVarIndex)
-            }
-            node = next
-        }
-    }
-
-    private fun handleMethodCall(insns: InsnList, insn: MethodInsnNode, targetReturnType: Type, ciVarIndex: Int) {
-        if (insn.owner == CALLBACK_INFO && insn.name == "cancel" && insn.desc == "()V") {
-            removeCiLoadAndCall(insns, insn, ciVarIndex)
-
-            if (targetReturnType.sort != Type.VOID) {
-                val nullInsn = when (targetReturnType.sort) {
-                    Type.BOOLEAN, Type.CHAR, Type.BYTE, Type.SHORT, Type.INT -> InsnNode(Opcodes.ICONST_0)
-                    Type.FLOAT -> InsnNode(Opcodes.FCONST_0)
-                    Type.LONG -> InsnNode(Opcodes.LCONST_0)
-                    Type.DOUBLE -> InsnNode(Opcodes.DCONST_0)
-                    else -> InsnNode(Opcodes.ACONST_NULL)
-                }
-                insns.insertBefore(insn, nullInsn)
+            val call = node as? MethodInsnNode
+            if (call == null || (call.owner != CALLBACK_INFO && call.owner != CALLBACK_INFO_RETURNABLE)) {
+                node = node.next
+                continue
             }
 
-            insns.insertBefore(insn, InsnNode(targetReturnType.getOpcode(Opcodes.IRETURN)))
-            insns.remove(insn)
-
-        } else if (insn.owner == CALLBACK_INFO_RETURNABLE && insn.name == "setReturnValue") {
-            val args = Type.getArgumentTypes(insn.desc)
-            if (args.isNotEmpty()) {
-                val valueType = args[0]
-
-                val removedLoad = removeCiLoadIfPossible(insns, insn, ciVarIndex)
-
-                if (!removedLoad) {
-                    if (valueType.size == 1) {
-                        insns.insertBefore(insn, InsnNode(Opcodes.SWAP))
-                        insns.insertBefore(insn, InsnNode(Opcodes.POP))
+            val handled = when {
+                call.name == "cancel" -> {
+                    dropCiLoad(insns, call, ciIndex)
+                    if (isTail(call, end)) {
+                        if (hasValue) {
+                            if (captureReturn) insns.insertBefore(call, VarInsnNode(returnType.getOpcode(Opcodes.ILOAD), retSlot))
+                            else insns.insertBefore(call, defaultValue(returnType))
+                        }
+                        insns.insertBefore(call, InsnNode(returnType.getOpcode(Opcodes.IRETURN)))
                     } else {
-                        insns.insertBefore(insn, InsnNode(Opcodes.DUP2_X1))
-                        insns.insertBefore(insn, InsnNode(Opcodes.POP2))
-                        insns.insertBefore(insn, InsnNode(Opcodes.POP))
+                        insns.insertBefore(call, setFlag(flagSlot))
+                        usesFlag = true
                     }
+                    true
                 }
 
-                adjustType(insns, insn, targetReturnType)
-                insns.insertBefore(insn, InsnNode(targetReturnType.getOpcode(Opcodes.IRETURN)))
-                insns.remove(insn)
+                call.name == "setReturnValue" && hasValue -> {
+                    val valueType = Type.getArgumentTypes(call.desc).firstOrNull() ?: Type.getType(Any::class.java)
+                    if (!removeCiLoadIfPossible(insns, call, ciIndex)) {
+                        if (valueType.size == 1) {
+                            insns.insertBefore(call, InsnNode(Opcodes.SWAP))
+                            insns.insertBefore(call, InsnNode(Opcodes.POP))
+                        } else {
+                            insns.insertBefore(call, InsnNode(Opcodes.DUP2_X1))
+                            insns.insertBefore(call, InsnNode(Opcodes.POP2))
+                            insns.insertBefore(call, InsnNode(Opcodes.POP))
+                        }
+                    }
+                    adjustType(insns, call, returnType)
+                    if (isTail(call, end)) {
+                        insns.insertBefore(call, InsnNode(returnType.getOpcode(Opcodes.IRETURN)))
+                    } else {
+                        insns.insertBefore(call, VarInsnNode(returnType.getOpcode(Opcodes.ISTORE), retSlot))
+                        insns.insertBefore(call, setFlag(flagSlot))
+                        usesFlag = true
+                    }
+                    true
+                }
+
+                call.name.startsWith("getReturnValue") -> {
+                    dropCiLoad(insns, call, ciIndex)
+                    val resultType = Type.getReturnType(call.desc)
+                    if (captureReturn && hasValue) {
+                        insns.insertBefore(call, VarInsnNode(returnType.getOpcode(Opcodes.ILOAD), retSlot))
+                        if (resultType.sort == Type.OBJECT && returnType.sort != Type.OBJECT && returnType.sort != Type.ARRAY) {
+                            if (!removeUnboxing(insns, call, returnType)) insns.insertBefore(call, box(returnType))
+                        }
+                    } else {
+                        insns.insertBefore(call, defaultValue(resultType))
+                    }
+                    true
+                }
+
+                call.name == "isCancelled" -> {
+                    dropCiLoad(insns, call, ciIndex)
+                    insns.insertBefore(call, VarInsnNode(Opcodes.ILOAD, flagSlot))
+                    usesFlag = true
+                    true
+                }
+
+                call.name == "isCancellable" -> {
+                    dropCiLoad(insns, call, ciIndex)
+                    insns.insertBefore(call, InsnNode(Opcodes.ICONST_1))
+                    true
+                }
+
+                else -> false
             }
+
+            node = call.next
+            if (handled) insns.remove(call)
         }
+        return usesFlag
     }
 
-    private fun removeCiLoadAndCall(insns: InsnList, callInsn: AbstractInsnNode, ciIndex: Int) {
+    private fun isTail(call: AbstractInsnNode, end: LabelNode): Boolean {
+        var p: AbstractInsnNode? = call.next
+        var hops = 0
+        while (p != null && hops < 16) {
+            when {
+                p === end -> return true
+                p.opcode == -1 -> p = p.next
+                p is JumpInsnNode && p.opcode == Opcodes.GOTO -> {
+                    p = p.label
+                    hops++
+                }
+                else -> return false
+            }
+        }
+        return p == null
+    }
+
+    private fun setFlag(flagSlot: Int): InsnList {
+        val list = InsnList()
+        list.add(InsnNode(Opcodes.ICONST_1))
+        list.add(VarInsnNode(Opcodes.ISTORE, flagSlot))
+        return list
+    }
+
+    private fun defaultValue(type: Type): InsnList {
+        val list = InsnList()
+        AsmHelper.pushDefaultValue(list, type)
+        return list
+    }
+
+    private fun box(type: Type): MethodInsnNode {
+        val wrapper = getWrapperInternalName(type)
+        return MethodInsnNode(Opcodes.INVOKESTATIC, wrapper, "valueOf", "(${type.descriptor})L$wrapper;", false)
+    }
+
+    private fun removeUnboxing(insns: InsnList, call: AbstractInsnNode, type: Type): Boolean {
+        var cast = call.next
+        while (cast != null && cast.opcode == -1) cast = cast.next
+        if (cast !is TypeInsnNode || cast.opcode != Opcodes.CHECKCAST || cast.desc != getWrapperInternalName(type)) return false
+
+        var unbox = cast.next
+        while (unbox != null && unbox.opcode == -1) unbox = unbox.next
+        if (unbox !is MethodInsnNode || unbox.name != getUnboxMethodName(type) || unbox.owner != cast.desc) return false
+
+        insns.remove(cast)
+        insns.remove(unbox)
+        return true
+    }
+
+    private fun dropCiLoad(insns: InsnList, callInsn: AbstractInsnNode, ciIndex: Int) {
         val prev = callInsn.previous
         if (prev is VarInsnNode && prev.opcode == Opcodes.ALOAD && prev.`var` == ciIndex) {
             insns.remove(prev)
@@ -394,7 +529,8 @@ object CodeGenerationUtils {
         target: MethodNode,
         offset: Int,
         labelMap: Map<LabelNode, LabelNode>,
-        boundary: Int
+        boundary: Int,
+        skipSlots: Set<Int> = emptySet()
     ) {
         val iter = insns.iterator()
         while (iter.hasNext()) {
@@ -415,7 +551,7 @@ object CodeGenerationUtils {
                 target.localVariables = ArrayList()
             }
             for (lvn in source.localVariables) {
-                if (lvn.index < boundary) continue
+                if (lvn.index < boundary || lvn.index in skipSlots) continue
 
                 val newStart = labelMap[lvn.start]
                 val newEnd = labelMap[lvn.end]

@@ -84,7 +84,49 @@ class MixinTransformerTest {
     fun injectHead() {
         val code = apply("InjectHead")
         assertContains(code, "System.out.println(\"head\");")
-        assertTrue(code.indexOf("println(\"head\")") < code.indexOf("local = 5;"))
+        assertTrue(code.indexOf("println(\"head\")") < code.indexOf("int local = 5;"))
+    }
+
+    @Test
+    fun injectReturnValue() {
+        val code = apply("ReturnPeek")
+        assertFalse(code.contains("cir"))
+        assertContains(code, "return result > 10 ? 10 : result;")
+    }
+
+    @Test
+    fun injectCancelKeepsRunningHandler() {
+        val code = apply("CancelThenWork")
+        val println = code.indexOf("println(\"after cancel\")")
+        assertTrue(println in 0 until code.indexOf("int local = 5;"))
+        assertFalse(code.substring(code.indexOf("public void tick()"), println).contains("else"))
+    }
+
+    @Test
+    fun injectCancelAtTheEndReturnsRightAway() {
+        val code = apply("CancelTail")
+        assertContains(code, "System.out.println(\"stop\");")
+        assertFalse(code.contains("boolean"))
+    }
+
+    @Test
+    fun injectSetReturnValueKeepsRunningHandler() {
+        val code = apply("SetReturnThenWork")
+        assertContains(code, "System.out.println(\"still here\");")
+        assertTrue(code.indexOf("println(\"still here\")") < code.indexOf("input * 2"))
+    }
+
+    @Test
+    fun injectInvokeAssign() {
+        val code = apply("AfterAssign")
+        assertTrue(code.indexOf("Helper.scale(mult);") < code.indexOf("println(\"after scale\")"))
+        assertTrue(code.indexOf("println(\"after scale\")") < code.indexOf("return f * i;"))
+    }
+
+    @Test
+    fun injectLocalCapture() {
+        val code = apply("CaptureLocals")
+        assertContains(code, "System.out.println(local);")
     }
 
     @Test

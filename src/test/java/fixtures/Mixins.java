@@ -19,8 +19,63 @@ import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 
 public class Mixins {
+    @Mixin(Target.class)
+    public static class ReturnPeek {
+        @Inject(method = "getValue", at = @At("RETURN"), cancellable = true)
+        private void capAt10(int input, CallbackInfoReturnable<Integer> cir) {
+            if (cir.getReturnValue() > 10) cir.setReturnValue(10);
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class CancelThenWork {
+        @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
+        private void stopLater(CallbackInfo ci) {
+            if (System.nanoTime() > 0L) ci.cancel();
+            System.out.println("after cancel");
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class CancelTail {
+        @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
+        private void stop(CallbackInfo ci) {
+            if (System.nanoTime() > 0L) {
+                System.out.println("stop");
+                ci.cancel();
+            }
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class SetReturnThenWork {
+        @Inject(method = "getValue", at = @At("HEAD"), cancellable = true)
+        private void early(int input, CallbackInfoReturnable<Integer> cir) {
+            if (input < 0) cir.setReturnValue(0);
+            System.out.println("still here");
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class AfterAssign {
+        @Inject(method = "speed", at = @At(value = "INVOKE_ASSIGN", target = "Lfixtures/Target$Helper;scale(I)I"))
+        private void afterScale(float base, int mult, CallbackInfoReturnable<Float> cir) {
+            System.out.println("after scale");
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class CaptureLocals {
+        @Inject(method = "tick", at = @At(value = "INVOKE", target = "Lfixtures/Target$Helper;doWork(I)V"), locals = LocalCapture.CAPTURE_FAILHARD)
+        private void seeLocal(CallbackInfo ci, int local) {
+            System.out.println(local);
+        }
+    }
+
     @Mixin(Target.class)
     public static class ConstantInt {
         @ModifyConstant(method = "tick", constant = @Constant(intValue = 20))
