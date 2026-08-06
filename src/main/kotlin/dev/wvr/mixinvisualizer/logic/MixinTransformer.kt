@@ -28,6 +28,8 @@ class MixinTransformer {
     )
 
     fun transform(target: ClassNode, mixin: ClassNode) {
+        renameClashingMethods(target, mixin)
+        mergeInterfaces(target, mixin)
         mergeUniqueMembers(target, mixin)
         mergeClinit(target, mixin)
         try {
@@ -97,8 +99,44 @@ class MixinTransformer {
         }
     }
 
+    private fun renameClashingMethods(target: ClassNode, mixin: ClassNode) {
+        val mixinName = mixin.name.substringAfterLast('/').substringAfterLast('$')
+
+        for (method in mixin.methods) {
+            if (!isMerged(method)) continue
+            if (target.methods.none { it.name == method.name && it.desc == method.desc }) continue
+
+            var newName = "${method.name}\$$mixinName"
+            var counter = 1
+            while (target.methods.any { it.name == newName && it.desc == method.desc } ||
+                mixin.methods.any { it.name == newName && it.desc == method.desc }
+            ) {
+                newName = "${method.name}\$$mixinName${counter++}"
+            }
+
+            for (other in mixin.methods) {
+                for (insn in other.instructions) {
+                    if (insn is MethodInsnNode && insn.owner == mixin.name && insn.name == method.name && insn.desc == method.desc) {
+                        insn.name = newName
+                    }
+                }
+            }
+            method.name = newName
+        }
+    }
+
+    private fun mergeInterfaces(target: ClassNode, mixin: ClassNode) {
+        val interfaces = mixin.interfaces.toMutableList()
+        if ((mixin.access and Opcodes.ACC_INTERFACE) != 0) interfaces.add(mixin.name)
+        for (iface in interfaces) {
+            if (iface !in target.interfaces) target.interfaces.add(iface)
+        }
+    }
+
     private fun mergeFieldInitializers(target: ClassNode, mixin: ClassNode) {
-        val mixinCtor = mixin.methods.find { it.name == "<init>" && it.desc == "()V" } ?: return
+        val mixinCtor = mixin.methods.firstOrNull {
+            it.name == "<init>" && AsmHelper.findSuperCall(it, mixin.superName) != null
+        } ?: return
         val superCall = AsmHelper.findSuperCall(mixinCtor, mixin.superName) ?: return
 
         val labels = HashMap<LabelNode, LabelNode>()
@@ -151,36 +189,32 @@ class MixinTransformer {
             if (isShadow(field.visibleAnnotations)) continue
 
             if (target.fields.none { it.name == field.name && it.desc == field.desc }) {
-                val newAccess = (field.access and Opcodes.ACC_PRIVATE.inv()) or Opcodes.ACC_PUBLIC
-                target.fields.add(FieldNode(newAccess, field.name, field.desc, field.signature, field.value))
+                target.fields.add(FieldNode(field.access, field.name, field.desc, field.signature, field.value))
             }
         }
 
         for (method in mixin.methods) {
-            if (isShadow(method.visibleAnnotations)) continue
+            if (!isMerged(method)) continue
+            if (target.methods.any { it.name == method.name && it.desc == method.desc }) continue
 
-            val anns = method.visibleAnnotations ?: emptyList()
-
-            val isInjector = anns.any { ann ->
-                AnnotationUtils.simpleName(ann.desc ?: "") in INLINED_INJECTORS
-            }
-
-            if (!isInjector && method.name != "<init>" && method.name != "<clinit>") {
-                if (target.methods.none { it.name == method.name && it.desc == method.desc }) {
-                    val newMethod = MethodNode(
-                        (method.access and Opcodes.ACC_PRIVATE.inv()) or Opcodes.ACC_PUBLIC,
-                        method.name,
-                        method.desc,
-                        method.signature,
-                        method.exceptions?.toTypedArray()
-                    )
-                    method.accept(newMethod)
-                    AsmHelper.remapMemberAccess(newMethod.instructions, mixin.name, target.name)
-                    AsmHelper.stripMixinAnnotations(newMethod)
-                    target.methods.add(newMethod)
-                }
-            }
+            val newMethod = MethodNode(
+                method.access,
+                method.name,
+                method.desc,
+                method.signature,
+                method.exceptions?.toTypedArray()
+            )
+            method.accept(newMethod)
+            AsmHelper.remapMemberAccess(newMethod.instructions, mixin.name, target.name)
+            AsmHelper.stripMixinAnnotations(newMethod)
+            target.methods.add(newMethod)
         }
+    }
+
+    private fun isMerged(method: MethodNode): Boolean {
+        if (method.name == "<init>" || method.name == "<clinit>") return false
+        if (isShadow(method.visibleAnnotations)) return false
+        return method.visibleAnnotations.orEmpty().none { AnnotationUtils.simpleName(it.desc ?: "") in INLINED_INJECTORS }
     }
 
     private fun isShadow(annotations: List<AnnotationNode>?): Boolean {

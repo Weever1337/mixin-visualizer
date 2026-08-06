@@ -176,8 +176,26 @@ class MixinTransformerTest {
     @Test
     fun uniqueFieldWithInitializer() {
         val code = apply("UniqueField")
-        assertContains(code, "bonus = 42")
-        assertContains(code, "int bonus()")
+        assertContains(code, "private int bonus = 42;")
+        assertContains(code, "public int bonus()")
+    }
+
+    @Test
+    fun clashingHandlersFromTwoMixinsKeepBothBodies() {
+        val code = apply("ClashFirst", "ClashSecond")
+        assertContains(code, "original * 2")
+        assertContains(code, "original - 7")
+        assertContains(code, "this.mod\$ClashSecond(")
+    }
+
+    @Test
+    fun mixinInterfacesAreMerged() {
+        assertContains(apply("WithInterface"), "public class Target implements Runnable")
+    }
+
+    @Test
+    fun fieldInitializersFromCtorWithArgs() {
+        assertContains(apply("CtorWithArgs"), "tag = \"mixin\"")
     }
 
     private fun apply(vararg mixins: String): String {

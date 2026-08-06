@@ -229,6 +229,39 @@ public class Mixins {
     }
 
     @Mixin(Target.class)
+    public static class ClashFirst {
+        @ModifyReturnValue(method = "getValue", at = @At("RETURN"))
+        private int mod(int original) {
+            return original * 2;
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class ClashSecond {
+        @ModifyReturnValue(method = "getValue", at = @At("RETURN"))
+        private int mod(int original) {
+            return original - 7;
+        }
+    }
+
+    @Mixin(Target.class)
+    public static abstract class WithInterface implements Runnable {
+        @Override
+        public void run() {
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class CtorWithArgs {
+        @Unique
+        private String tag = "mixin";
+
+        CtorWithArgs(int unused) {
+            super();
+        }
+    }
+
+    @Mixin(Target.class)
     public static class UniqueField {
         @Unique
         private int bonus = 42;
