@@ -135,6 +135,24 @@ class MixinTransformerTest {
     }
 
     @Test
+    fun modifyArgTakingAllArgs() {
+        val code = apply("ArgFromAll")
+        assertContains(code, "this.withKey(")
+        assertContains(code, ".send(")
+    }
+
+    @Test
+    fun modifyArgsPlaceholder() {
+        val code = apply("ArgsObject")
+        assertTrue(code.indexOf("this.changeArgs(null);") in 0 until code.indexOf(".send(var2, code);"))
+    }
+
+    @Test
+    fun capturedTargetArgs() {
+        assertContains(apply("ReturnWithArgs"), ", input)")
+    }
+
+    @Test
     fun modifyExpressionValueWithLocal() {
         val code = apply("ExprValue")
         assertContains(code, "this.helper.isReady()")

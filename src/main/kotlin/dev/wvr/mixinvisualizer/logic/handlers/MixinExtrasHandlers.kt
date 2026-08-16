@@ -29,8 +29,13 @@ internal object MixinExtrasSupport {
         targetMethod: MethodNode
     ) {
         val args = Type.getArgumentTypes(source.desc)
+        var captureIndex = 0
         for (i in consumedArgs until args.size) {
-            LocalsSupport.pushExtraArg(list, source, i, args[i], targetClass, targetMethod)
+            if (LocalsSupport.isSugar(source, i)) {
+                LocalsSupport.pushExtraArg(list, source, i, args[i], targetClass, targetMethod)
+            } else {
+                AsmHelper.pushArgOrDefault(list, targetMethod, captureIndex++, args[i])
+            }
         }
     }
 

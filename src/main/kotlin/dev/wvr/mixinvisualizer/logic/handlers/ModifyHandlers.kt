@@ -209,7 +209,6 @@ class ModifyArgHandler : MixinHandler {
         annotation: AnnotationNode
     ) {
         val targets = AnnotationUtils.getListValue(annotation, "method")
-        val atTarget = AnnotationUtils.getAtValue(annotation, "target")
         val explicitIndex = AnnotationUtils.getValue(annotation, "index") as? Int ?: -1
         val isStatic = (sourceMethod.access and Opcodes.ACC_STATIC) != 0
         val handlerValueType = Type.getReturnType(sourceMethod.desc)
@@ -217,32 +216,82 @@ class ModifyArgHandler : MixinHandler {
         for (ref in targets) {
             val targetMethod = TargetFinderUtils.findTargetMethodLike(targetClass, ref) ?: continue
 
-            val matches = targetMethod.instructions.toArray()
+            val matches = MixinExtrasSupport.findMatches(targetClass, targetMethod, annotation)
                 .filterIsInstance<MethodInsnNode>()
-                .filter { TargetFinderUtils.isMatch(it, atTarget) }
 
             for (insn in matches) {
-                val argTypes = Type.getArgumentTypes(insn.desc)
+                val argTypes = Type.getArgumentTypes(insn.desc).toList()
 
                 val index = if (explicitIndex >= 0) explicitIndex
                 else argTypes.indexOfFirst { it == handlerValueType }
                 if (index !in argTypes.indices) continue
 
-                val tailTypes = argTypes.drop(index + 1)
-                val valueType = argTypes[index]
+                val list = InsnList()
+                if (takesAllArgs(sourceMethod, argTypes)) {
+                    val argSlots = AsmHelper.stashStack(list, argTypes, targetMethod)
+                    if (!isStatic) list.add(VarInsnNode(Opcodes.ALOAD, 0))
+                    AsmHelper.unstashStack(list, argTypes, argSlots)
+                    MixinExtrasSupport.pushExtraArgs(list, sourceMethod, argTypes.size, targetClass, targetMethod)
+                    list.add(MixinExtrasSupport.invokeHandler(targetClass, sourceMethod))
+
+                    val valueSlot = AsmHelper.stashStack(list, listOf(argTypes[index]), targetMethod)
+                    AsmHelper.unstashStack(list, argTypes.take(index), argSlots.copyOfRange(0, index))
+                    AsmHelper.unstashStack(list, listOf(argTypes[index]), valueSlot)
+                    AsmHelper.unstashStack(list, argTypes.drop(index + 1), argSlots.copyOfRange(index + 1, argTypes.size))
+                } else {
+                    val tailTypes = argTypes.drop(index + 1)
+                    val valueType = argTypes[index]
+                    val tailSlots = AsmHelper.stashStack(list, tailTypes, targetMethod)
+
+                    if (!isStatic) {
+                        val valueSlots = AsmHelper.stashStack(list, listOf(valueType), targetMethod)
+                        list.add(VarInsnNode(Opcodes.ALOAD, 0))
+                        AsmHelper.unstashStack(list, listOf(valueType), valueSlots)
+                    }
+                    MixinExtrasSupport.pushExtraArgs(list, sourceMethod, 1, targetClass, targetMethod)
+                    list.add(MixinExtrasSupport.invokeHandler(targetClass, sourceMethod))
+
+                    AsmHelper.unstashStack(list, tailTypes, tailSlots)
+                }
+
+                targetMethod.instructions.insertBefore(insn, list)
+            }
+        }
+    }
+
+    private fun takesAllArgs(handler: MethodNode, argTypes: List<Type>): Boolean {
+        val handlerArgs = Type.getArgumentTypes(handler.desc)
+        return argTypes.size > 1 && handlerArgs.size >= argTypes.size && argTypes.indices.all { handlerArgs[it] == argTypes[it] }
+    }
+}
+
+class ModifyArgsHandler : MixinHandler {
+    override fun canHandle(annotationDesc: String): Boolean =
+        AnnotationUtils.simpleName(annotationDesc) == "ModifyArgs"
+
+    override fun handle(
+        targetClass: ClassNode,
+        mixinClass: ClassNode,
+        sourceMethod: MethodNode,
+        annotation: AnnotationNode
+    ) {
+        val targets = AnnotationUtils.getListValue(annotation, "method")
+        val isStatic = (sourceMethod.access and Opcodes.ACC_STATIC) != 0
+
+        for (ref in targets) {
+            val targetMethod = TargetFinderUtils.findTargetMethodLike(targetClass, ref) ?: continue
+
+            for (insn in MixinExtrasSupport.findMatches(targetClass, targetMethod, annotation)) {
+                if (insn !is MethodInsnNode) continue
+                val argTypes = Type.getArgumentTypes(insn.desc).toList()
 
                 val list = InsnList()
-                val tailSlots = AsmHelper.stashStack(list, tailTypes, targetMethod)
-
-                if (!isStatic) {
-                    val valueSlots = AsmHelper.stashStack(list, listOf(valueType), targetMethod)
-                    list.add(VarInsnNode(Opcodes.ALOAD, 0))
-                    AsmHelper.unstashStack(list, listOf(valueType), valueSlots)
-                }
+                val argSlots = AsmHelper.stashStack(list, argTypes, targetMethod)
+                if (!isStatic) list.add(VarInsnNode(Opcodes.ALOAD, 0))
+                list.add(InsnNode(Opcodes.ACONST_NULL)) // TODO (modifyargs) real Args object instead of null
                 MixinExtrasSupport.pushExtraArgs(list, sourceMethod, 1, targetClass, targetMethod)
                 list.add(MixinExtrasSupport.invokeHandler(targetClass, sourceMethod))
-
-                AsmHelper.unstashStack(list, tailTypes, tailSlots)
+                AsmHelper.unstashStack(list, argTypes, argSlots)
 
                 targetMethod.instructions.insertBefore(insn, list)
             }

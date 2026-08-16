@@ -15,12 +15,14 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Constant;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
+import org.spongepowered.asm.mixin.injection.ModifyArgs;
 import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
+import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
 public class Mixins {
     @Mixin(Target.class)
@@ -225,6 +227,30 @@ public class Mixins {
         @Overwrite
         public int getValue(int input) {
             return input + input;
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class ArgFromAll {
+        @ModifyArg(method = "report", at = @At(value = "INVOKE", target = "Lfixtures/Target$Helper;send(Ljava/lang/String;I)V"), index = 1)
+        private int withKey(String key, int value) {
+            return value + key.length();
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class ArgsObject {
+        @ModifyArgs(method = "report", at = @At(value = "INVOKE", target = "Lfixtures/Target$Helper;send(Ljava/lang/String;I)V"))
+        private void changeArgs(Args args) {
+            args.set(1, 99);
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class ReturnWithArgs {
+        @ModifyReturnValue(method = "getValue", at = @At("RETURN"))
+        private int plusInput(int original, int input) {
+            return original + input;
         }
     }
 

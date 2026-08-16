@@ -5,6 +5,7 @@ public class Target {
         public boolean isReady() { return true; }
         public void doWork(int x) {}
         public static int scale(int v) { return v * 3; }
+        public void send(String key, int value) {}
     }
 
     private int counter;
@@ -29,5 +30,9 @@ public class Target {
         float f = base * 0.5f;
         int i = Helper.scale(mult);
         return f * i;
+    }
+
+    public void report(int code) {
+        helper.send("code", code);
     }
 }

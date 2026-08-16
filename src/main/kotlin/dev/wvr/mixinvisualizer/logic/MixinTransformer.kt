@@ -13,6 +13,7 @@ class MixinTransformer {
         RedirectHandler(),
 
         ModifyArgHandler(),
+        ModifyArgsHandler(),
         ModifyConstantHandler(),
         ModifyVariableHandler(),
 
