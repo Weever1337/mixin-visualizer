@@ -8,6 +8,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.*
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.searches.AnnotatedElementsSearch
+import com.intellij.psi.util.ClassUtil
 import dev.wvr.mixinvisualizer.util.BytecodeUtils
 import org.objectweb.asm.Handle
 import org.objectweb.asm.tree.ClassNode
@@ -192,19 +193,23 @@ class MixinProcessor(private val project: Project) {
 
     private fun resolveBytecode(vFile: VirtualFile, applyAll: Boolean): ResolvedBytecode {
         return DumbService.getInstance(project).runReadActionInSmartMode<ResolvedBytecode> {
-            val freshPsi = PsiManager.getInstance(project).findFile(vFile) as? PsiJavaFile
-                ?: throw ProcessError("Err", "// Not a java file")
+            val freshPsi = PsiManager.getInstance(project).findFile(vFile) as? PsiClassOwner
+                ?: throw ProcessError("Err", "// Not a java or kotlin file")
 
-            val clazz = freshPsi.classes.firstOrNull()
+            val clazz = freshPsi.classes.firstOrNull { it.hasAnnotation(MIXIN_ANNOTATION) }
+                ?: freshPsi.classes.firstOrNull()
                 ?: throw ProcessError("", "// Class not found")
             val targetRef = findTargetClasses(clazz).firstOrNull()
                 ?: throw ProcessError("", "// No @Mixin annotation")
 
+            val outerName = targetRef.substringBefore('$')
             val targetPsi = JavaPsiFacade.getInstance(project)
-                .findClass(targetRef, GlobalSearchScope.allScope(project))
+                .findClass(outerName, GlobalSearchScope.allScope(project))
                 ?: throw ProcessError("", "// Target $targetRef not found")
 
-            val targetBytes = findBytecode(targetPsi)
+            val nested = targetRef.substringAfter('$', "")
+            val targetBinaryName = getBinaryName(targetPsi) + if (nested.isNotEmpty()) "\$$nested" else ""
+            val targetBytes = findBytecode(targetPsi, targetBinaryName)
                 ?: throw ProcessError("", "// Original bytecode not found")
 
             val mixinBytes = findBytecode(clazz)
@@ -255,7 +260,10 @@ class MixinProcessor(private val project: Project) {
 
         fun add(value: PsiAnnotationMemberValue?) {
             when (value) {
-                is PsiClassObjectAccessExpression -> result.add(value.operand.type.canonicalText)
+                is PsiClassObjectAccessExpression -> {
+                    val resolved = (value.operand.type as? PsiClassType)?.resolve()
+                    result.add(resolved?.let { ClassUtil.getJVMClassName(it) } ?: value.operand.type.canonicalText)
+                }
                 is PsiLiteralExpression -> (value.value as? String)?.let { result.add(it.replace('/', '.')) }
                 is PsiArrayInitializerMemberValue -> value.initializers.forEach { add(it) }
                 else -> {}
@@ -267,15 +275,17 @@ class MixinProcessor(private val project: Project) {
         return result
     }
 
-    private fun findBytecode(psiClass: PsiClass): ByteArray? {
+    private fun findBytecode(psiClass: PsiClass, binaryName: String = getBinaryName(psiClass)): ByteArray? {
         val vFile = psiClass.containingFile?.virtualFile ?: return null
-        if (vFile.fileType.isBinary) return vFile.contentsToByteArray()
+        if (vFile.fileType.isBinary) {
+            val classFile = vFile.parent?.findChild("$binaryName.class") ?: vFile
+            return classFile.contentsToByteArray()
+        }
 
         val fileIndex = ProjectRootManager.getInstance(project).fileIndex
         val module = fileIndex.getModuleForFile(vFile) ?: return null
 
         val pkg = (psiClass.containingFile as? PsiClassOwner)?.packageName ?: ""
-        val binaryName = getBinaryName(psiClass)
         val relPath = pkg.replace('.', '/') + "/" + binaryName + ".class"
 
         val compilerExt = CompilerModuleExtension.getInstance(module)
