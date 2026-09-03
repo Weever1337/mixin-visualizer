@@ -21,6 +21,8 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiManager
 import com.intellij.psi.PsiTreeChangeAdapter
 import com.intellij.psi.PsiTreeChangeEvent
+import com.intellij.task.ProjectTaskListener
+import com.intellij.task.ProjectTaskManager
 import com.intellij.ui.components.JBLoadingPanel
 import com.intellij.util.Alarm
 import dev.wvr.mixinvisualizer.lang.BytecodeFileType
@@ -74,6 +76,11 @@ class MixinPreviewEditor(
         connection.subscribe(MixinCompilationTopic.TOPIC, object : MixinCompilationTopic {
             override fun onCompilationFinished() {
                 scheduleRefresh(immediate = true)
+            }
+        })
+        connection.subscribe(ProjectTaskListener.TOPIC, object : ProjectTaskListener {
+            override fun finished(result: ProjectTaskManager.Result) {
+                if (!result.isAborted && !result.hasErrors()) scheduleRefresh(immediate = true)
             }
         })
 
@@ -213,9 +220,14 @@ class MixinPreviewEditor(
         val doc = currentResultDocument ?: return
 
         val text = doc.charsSequence
-        var idx = text.indexOf(" $targetName(")
-        if (idx == -1) idx = text.indexOf(" $targetName ")
-        if (idx == -1) idx = text.indexOf(targetName)
+        val name = when (targetName) {
+            "<init>" -> Regex("\\bclass (\\w+)").find(text)?.groupValues?.get(1) ?: targetName
+            "<clinit>" -> "static {"
+            else -> targetName
+        }
+        var idx = text.indexOf(" $name(")
+        if (idx == -1) idx = text.indexOf(" $name ")
+        if (idx == -1) idx = text.indexOf(name)
 
         if (idx != -1) {
             val editors = EditorFactory.getInstance().getEditors(doc, project)
@@ -227,7 +239,7 @@ class MixinPreviewEditor(
                     editor.caretModel.moveToOffset(offset)
                     editor.scrollingModel.scrollTo(LogicalPosition(line, 0), ScrollType.CENTER)
 
-                    editor.selectionModel.setSelection(offset, offset + targetName.length)
+                    editor.selectionModel.setSelection(offset, offset + name.length)
                 }
             }
         }

@@ -9,6 +9,7 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.psi.*
 import com.intellij.util.Function
+import dev.wvr.mixinvisualizer.logic.util.TargetFinderUtils
 
 class MixinLineMarkerProvider : LineMarkerProvider {
     companion object {
@@ -96,7 +97,7 @@ class MixinLineMarkerProvider : LineMarkerProvider {
             val resolved = resolveAnnotationValue(methodAttr)
 
             if (!resolved.isNullOrEmpty()) {
-                return resolved
+                return TargetFinderUtils.parseMethodRef(resolved)?.second ?: resolved
             }
         }
         return null
