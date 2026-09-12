@@ -5,11 +5,103 @@ import dev.wvr.mixinvisualizer.logic.util.AnnotationUtils
 import dev.wvr.mixinvisualizer.logic.util.LocalsSupport
 import dev.wvr.mixinvisualizer.logic.util.SliceHelper
 import dev.wvr.mixinvisualizer.logic.util.TargetFinderUtils
+import org.objectweb.asm.Handle
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
 import org.objectweb.asm.tree.*
 
 internal object MixinExtrasSupport {
+    private const val OPERATION = "com/llamalad7/mixinextras/injector/wrapoperation/Operation"
+    private const val CALL_DESC = "([Ljava/lang/Object;)Ljava/lang/Object;"
+    private val METAFACTORY = Handle(
+        Opcodes.H_INVOKESTATIC,
+        "java/lang/invoke/LambdaMetafactory",
+        "metafactory",
+        "(Ljava/lang/invoke/MethodHandles\$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;" +
+                "Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;",
+        false
+    )
+
+    fun operationLambda(targetClass: ClassNode, original: AbstractInsnNode, argTypes: List<Type>): InsnList {
+        val body = InsnList()
+        for (i in argTypes.indices) {
+            body.add(VarInsnNode(Opcodes.ALOAD, 0))
+            body.add(AsmHelper.pushInt(i))
+            body.add(InsnNode(Opcodes.AALOAD))
+            AsmHelper.unbox(body, argTypes[i])
+        }
+        body.add(original.clone(emptyMap()))
+        AsmHelper.box(body, producedType(original))
+
+        val name = addLambdaBody(targetClass, "lambda\$wrapOperation\$", true, body)
+        return InsnList().also { it.add(lambdaFactory(targetClass, name, true)) }
+    }
+
+    fun originalLambda(targetClass: ClassNode, method: MethodNode, originalName: String): InsnList {
+        val isStatic = (method.access and Opcodes.ACC_STATIC) != 0
+        val isInterface = (targetClass.access and Opcodes.ACC_INTERFACE) != 0
+        val argsSlot = if (isStatic) 0 else 1
+
+        val body = InsnList()
+        if (!isStatic) body.add(VarInsnNode(Opcodes.ALOAD, 0))
+        Type.getArgumentTypes(method.desc).forEachIndexed { i, type ->
+            body.add(VarInsnNode(Opcodes.ALOAD, argsSlot))
+            body.add(AsmHelper.pushInt(i))
+            body.add(InsnNode(Opcodes.AALOAD))
+            AsmHelper.unbox(body, type)
+        }
+        body.add(
+            MethodInsnNode(
+                if (isStatic) Opcodes.INVOKESTATIC else Opcodes.INVOKESPECIAL,
+                targetClass.name,
+                originalName,
+                method.desc,
+                isInterface
+            )
+        )
+        AsmHelper.box(body, Type.getReturnType(method.desc))
+
+        val name = addLambdaBody(targetClass, "lambda\$wrapMethod\$", isStatic, body)
+        val list = InsnList()
+        if (!isStatic) list.add(VarInsnNode(Opcodes.ALOAD, 0))
+        list.add(lambdaFactory(targetClass, name, isStatic))
+        return list
+    }
+
+    private fun addLambdaBody(targetClass: ClassNode, prefix: String, isStatic: Boolean, body: InsnList): String {
+        val name = AsmHelper.freeMethodName(targetClass, prefix)
+        val access = Opcodes.ACC_PRIVATE or Opcodes.ACC_SYNTHETIC or if (isStatic) Opcodes.ACC_STATIC else 0
+        val method = MethodNode(access, name, CALL_DESC, null, null)
+
+        val start = LabelNode()
+        val end = LabelNode()
+        method.instructions.add(start)
+        method.instructions.add(body)
+        method.instructions.add(InsnNode(Opcodes.ARETURN))
+        method.instructions.add(end)
+
+        method.localVariables = ArrayList()
+        if (!isStatic) method.localVariables.add(LocalVariableNode("this", "L${targetClass.name};", null, start, end, 0))
+        method.localVariables.add(LocalVariableNode("args", "[Ljava/lang/Object;", null, start, end, if (isStatic) 0 else 1))
+
+        targetClass.methods.add(method)
+        return name
+    }
+
+    private fun lambdaFactory(targetClass: ClassNode, implName: String, implStatic: Boolean): InvokeDynamicInsnNode {
+        val isInterface = (targetClass.access and Opcodes.ACC_INTERFACE) != 0
+        val captured = if (implStatic) "" else "L${targetClass.name};"
+        val impl = Handle(
+            if (implStatic) Opcodes.H_INVOKESTATIC else Opcodes.H_INVOKESPECIAL,
+            targetClass.name,
+            implName,
+            CALL_DESC,
+            isInterface
+        )
+        val callType = Type.getType(CALL_DESC)
+        return InvokeDynamicInsnNode("call", "($captured)L$OPERATION;", METAFACTORY, callType, impl, callType)
+    }
+
     fun invokeHandler(targetClass: ClassNode, source: MethodNode): MethodInsnNode {
         val isStatic = (source.access and Opcodes.ACC_STATIC) != 0
         return MethodInsnNode(
@@ -192,7 +284,7 @@ class WrapOperationHandler : MixinHandler {
                     AsmHelper.unstashStack(list, consumed, slots)
                 }
 
-                list.add(InsnNode(Opcodes.ACONST_NULL)) // TODO (wrapop) real Operation lambda instead of null
+                list.add(MixinExtrasSupport.operationLambda(targetClass, insn, consumed))
                 MixinExtrasSupport.pushExtraArgs(list, sourceMethod, consumed.size + 1, targetClass, targetMethod)
                 list.add(MixinExtrasSupport.invokeHandler(targetClass, sourceMethod))
 
@@ -242,14 +334,23 @@ class WrapMethodHandler : MixinHandler {
                 targetClass.methods.add(orig)
             }
 
+            val argsSize = AsmHelper.getArgsSize(targetMethod)
+            val params = targetMethod.localVariables.orEmpty().filter { it.index < argsSize }.distinctBy { it.index }
+
             targetMethod.instructions.clear()
             targetMethod.tryCatchBlocks?.clear()
-            targetMethod.localVariables = ArrayList()
 
             val targetStatic = (targetMethod.access and Opcodes.ACC_STATIC) != 0
             val argTypes = Type.getArgumentTypes(targetMethod.desc)
 
+            val start = LabelNode()
+            val end = LabelNode()
+            targetMethod.localVariables = params.mapTo(ArrayList()) {
+                LocalVariableNode(it.name, it.desc, it.signature, start, end, it.index)
+            }
+
             val insns = InsnList()
+            insns.add(start)
             if (!handlerStatic) insns.add(VarInsnNode(Opcodes.ALOAD, 0))
 
             var slot = if (targetStatic) 0 else 1
@@ -258,12 +359,13 @@ class WrapMethodHandler : MixinHandler {
                 slot += arg.size
             }
 
-            insns.add(InsnNode(Opcodes.ACONST_NULL)) // TODO (wrapop) real Operation lambda instead of null
+            insns.add(MixinExtrasSupport.originalLambda(targetClass, targetMethod, origName))
             MixinExtrasSupport.pushExtraArgs(insns, sourceMethod, argTypes.size + 1, targetClass, targetMethod)
             insns.add(MixinExtrasSupport.invokeHandler(targetClass, sourceMethod))
 
             val returnType = Type.getReturnType(targetMethod.desc)
             insns.add(InsnNode(returnType.getOpcode(Opcodes.IRETURN)))
+            insns.add(end)
 
             targetMethod.instructions.add(insns)
         }

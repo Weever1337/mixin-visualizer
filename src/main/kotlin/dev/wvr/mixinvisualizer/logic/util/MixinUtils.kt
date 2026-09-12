@@ -378,7 +378,7 @@ object CodeGenerationUtils {
                     if (captureReturn && hasValue) {
                         insns.insertBefore(call, VarInsnNode(returnType.getOpcode(Opcodes.ILOAD), retSlot))
                         if (resultType.sort == Type.OBJECT && returnType.sort != Type.OBJECT && returnType.sort != Type.ARRAY) {
-                            if (!removeUnboxing(insns, call, returnType)) insns.insertBefore(call, box(returnType))
+                            if (!removeUnboxing(insns, call, returnType)) insns.insertBefore(call, InsnList().also { AsmHelper.box(it, returnType) })
                         }
                     } else {
                         insns.insertBefore(call, defaultValue(resultType))
@@ -438,19 +438,14 @@ object CodeGenerationUtils {
         return list
     }
 
-    private fun box(type: Type): MethodInsnNode {
-        val wrapper = getWrapperInternalName(type)
-        return MethodInsnNode(Opcodes.INVOKESTATIC, wrapper, "valueOf", "(${type.descriptor})L$wrapper;", false)
-    }
-
     private fun removeUnboxing(insns: InsnList, call: AbstractInsnNode, type: Type): Boolean {
         var cast = call.next
         while (cast != null && cast.opcode == -1) cast = cast.next
-        if (cast !is TypeInsnNode || cast.opcode != Opcodes.CHECKCAST || cast.desc != getWrapperInternalName(type)) return false
+        if (cast !is TypeInsnNode || cast.opcode != Opcodes.CHECKCAST || cast.desc != AsmHelper.wrapperName(type)) return false
 
         var unbox = cast.next
         while (unbox != null && unbox.opcode == -1) unbox = unbox.next
-        if (unbox !is MethodInsnNode || unbox.name != getUnboxMethodName(type) || unbox.owner != cast.desc) return false
+        if (unbox !is MethodInsnNode || unbox.name != AsmHelper.unboxName(type) || unbox.owner != cast.desc) return false
 
         insns.remove(cast)
         insns.remove(unbox)
@@ -481,46 +476,7 @@ object CodeGenerationUtils {
     }
 
     private fun adjustType(insns: InsnList, location: AbstractInsnNode, targetType: Type) {
-        if (targetType.sort != Type.OBJECT && targetType.sort != Type.ARRAY && targetType.sort != Type.VOID) {
-            val internalName = getWrapperInternalName(targetType)
-            val methodName = getUnboxMethodName(targetType)
-            val desc = "()" + targetType.descriptor
-
-            insns.insertBefore(location, TypeInsnNode(Opcodes.CHECKCAST, internalName))
-            insns.insertBefore(location, MethodInsnNode(Opcodes.INVOKEVIRTUAL, internalName, methodName, desc, false))
-        } else if (targetType.sort == Type.OBJECT || targetType.sort == Type.ARRAY) {
-            if (targetType.internalName != "java/lang/Object") {
-                insns.insertBefore(location, TypeInsnNode(Opcodes.CHECKCAST, targetType.internalName))
-            }
-        }
-    }
-
-    private fun getWrapperInternalName(type: Type): String {
-        return when (type.sort) {
-            Type.BOOLEAN -> "java/lang/Boolean"
-            Type.CHAR -> "java/lang/Character"
-            Type.BYTE -> "java/lang/Byte"
-            Type.SHORT -> "java/lang/Short"
-            Type.INT -> "java/lang/Integer"
-            Type.FLOAT -> "java/lang/Float"
-            Type.LONG -> "java/lang/Long"
-            Type.DOUBLE -> "java/lang/Double"
-            else -> "java/lang/Object"
-        }
-    }
-
-    private fun getUnboxMethodName(type: Type): String {
-        return when (type.sort) {
-            Type.BOOLEAN -> "booleanValue"
-            Type.CHAR -> "charValue"
-            Type.BYTE -> "byteValue"
-            Type.SHORT -> "shortValue"
-            Type.INT -> "intValue"
-            Type.FLOAT -> "floatValue"
-            Type.LONG -> "longValue"
-            Type.DOUBLE -> "doubleValue"
-            else -> "toString"
-        }
+        insns.insertBefore(location, InsnList().also { AsmHelper.unbox(it, targetType) })
     }
 
     private fun remapLocalVariables(

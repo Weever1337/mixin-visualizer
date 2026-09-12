@@ -174,13 +174,15 @@ class MixinTransformerTest {
 
     @Test
     fun wrapOperation() {
-        assertContains(apply("WrapOp"), "this.wrapWork(")
+        val code = apply("WrapOp")
+        assertContains(code, "this.wrapWork(var2, local, args -> {")
+        assertContains(code, "((Helper)args[0]).doWork((Integer)args[1]);")
     }
 
     @Test
     fun wrapMethod() {
         val code = apply("WrapWhole")
-        assertContains(code, "return this.wrapValue(")
+        assertContains(code, "return this.wrapValue(input, args -> this.getValue\$original((Integer)args[0]));")
         assertContains(code, "getValue\$original(int input)")
     }
 

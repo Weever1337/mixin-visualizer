@@ -136,6 +136,68 @@ object AsmHelper {
 
     fun isCompatible(from: Type, to: Type) = from == to || (isReference(from) && isReference(to))
 
+    fun wrapperName(type: Type): String = when (type.sort) {
+        Type.BOOLEAN -> "java/lang/Boolean"
+        Type.CHAR -> "java/lang/Character"
+        Type.BYTE -> "java/lang/Byte"
+        Type.SHORT -> "java/lang/Short"
+        Type.INT -> "java/lang/Integer"
+        Type.FLOAT -> "java/lang/Float"
+        Type.LONG -> "java/lang/Long"
+        Type.DOUBLE -> "java/lang/Double"
+        else -> "java/lang/Object"
+    }
+
+    fun unboxName(type: Type): String = when (type.sort) {
+        Type.BOOLEAN -> "booleanValue"
+        Type.CHAR -> "charValue"
+        Type.BYTE -> "byteValue"
+        Type.SHORT -> "shortValue"
+        Type.INT -> "intValue"
+        Type.FLOAT -> "floatValue"
+        Type.LONG -> "longValue"
+        Type.DOUBLE -> "doubleValue"
+        else -> "toString"
+    }
+
+    fun box(list: InsnList, type: Type) {
+        when (type.sort) {
+            Type.VOID -> list.add(InsnNode(Opcodes.ACONST_NULL))
+            Type.OBJECT, Type.ARRAY -> {}
+            else -> {
+                val wrapper = wrapperName(type)
+                list.add(MethodInsnNode(Opcodes.INVOKESTATIC, wrapper, "valueOf", "(${type.descriptor})L$wrapper;", false))
+            }
+        }
+    }
+
+    fun unbox(list: InsnList, type: Type) {
+        when (type.sort) {
+            Type.VOID -> {}
+            Type.OBJECT, Type.ARRAY -> {
+                if (type.internalName != "java/lang/Object") list.add(TypeInsnNode(Opcodes.CHECKCAST, type.internalName))
+            }
+            else -> {
+                val wrapper = wrapperName(type)
+                list.add(TypeInsnNode(Opcodes.CHECKCAST, wrapper))
+                list.add(MethodInsnNode(Opcodes.INVOKEVIRTUAL, wrapper, unboxName(type), "()${type.descriptor}", false))
+            }
+        }
+    }
+
+    fun pushInt(value: Int): AbstractInsnNode = when (value) {
+        in -1..5 -> InsnNode(Opcodes.ICONST_0 + value)
+        in Byte.MIN_VALUE..Byte.MAX_VALUE -> IntInsnNode(Opcodes.BIPUSH, value)
+        in Short.MIN_VALUE..Short.MAX_VALUE -> IntInsnNode(Opcodes.SIPUSH, value)
+        else -> LdcInsnNode(value)
+    }
+
+    fun freeMethodName(owner: ClassNode, prefix: String): String {
+        var i = 0
+        while (owner.methods.any { it.name == "$prefix$i" }) i++
+        return "$prefix$i"
+    }
+
     private fun isReference(type: Type) = type.sort == Type.OBJECT || type.sort == Type.ARRAY
 
     fun pushDefaultValue(list: InsnList, type: Type) {
