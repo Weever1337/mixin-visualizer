@@ -266,6 +266,10 @@ class ModifyArgHandler : MixinHandler {
 }
 
 class ModifyArgsHandler : MixinHandler {
+    companion object {
+        private const val ARGS = "org/spongepowered/asm/mixin/injection/invoke/arg/Args"
+    }
+
     override fun canHandle(annotationDesc: String): Boolean =
         AnnotationUtils.simpleName(annotationDesc) == "ModifyArgs"
 
@@ -287,11 +291,41 @@ class ModifyArgsHandler : MixinHandler {
 
                 val list = InsnList()
                 val argSlots = AsmHelper.stashStack(list, argTypes, targetMethod)
+
+                val argsSlot = targetMethod.maxLocals
+                targetMethod.maxLocals += 1
+                list.add(TypeInsnNode(Opcodes.NEW, ARGS))
+                list.add(InsnNode(Opcodes.DUP))
+                list.add(AsmHelper.pushInt(argTypes.size))
+                list.add(TypeInsnNode(Opcodes.ANEWARRAY, "java/lang/Object"))
+                for (i in argTypes.indices) {
+                    list.add(InsnNode(Opcodes.DUP))
+                    list.add(AsmHelper.pushInt(i))
+                    list.add(VarInsnNode(argTypes[i].getOpcode(Opcodes.ILOAD), argSlots[i]))
+                    AsmHelper.box(list, argTypes[i])
+                    list.add(InsnNode(Opcodes.AASTORE))
+                }
+                list.add(MethodInsnNode(Opcodes.INVOKESPECIAL, ARGS, "<init>", "([Ljava/lang/Object;)V", false))
+                list.add(VarInsnNode(Opcodes.ASTORE, argsSlot))
+
+                val start = LabelNode()
+                val end = LabelNode()
+                list.add(start)
                 if (!isStatic) list.add(VarInsnNode(Opcodes.ALOAD, 0))
-                list.add(InsnNode(Opcodes.ACONST_NULL)) // TODO (modifyargs) real Args object instead of null
+                list.add(VarInsnNode(Opcodes.ALOAD, argsSlot))
                 MixinExtrasSupport.pushExtraArgs(list, sourceMethod, 1, targetClass, targetMethod)
                 list.add(MixinExtrasSupport.invokeHandler(targetClass, sourceMethod))
-                AsmHelper.unstashStack(list, argTypes, argSlots)
+
+                for (i in argTypes.indices) {
+                    list.add(VarInsnNode(Opcodes.ALOAD, argsSlot))
+                    list.add(AsmHelper.pushInt(i))
+                    list.add(MethodInsnNode(Opcodes.INVOKEVIRTUAL, ARGS, "get", "(I)Ljava/lang/Object;", false))
+                    AsmHelper.unbox(list, argTypes[i])
+                }
+                list.add(end)
+
+                if (targetMethod.localVariables == null) targetMethod.localVariables = ArrayList()
+                targetMethod.localVariables.add(LocalVariableNode("args", "L$ARGS;", null, start, end, argsSlot))
 
                 targetMethod.instructions.insertBefore(insn, list)
             }

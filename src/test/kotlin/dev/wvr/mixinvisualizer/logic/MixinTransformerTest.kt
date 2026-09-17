@@ -142,9 +142,11 @@ class MixinTransformerTest {
     }
 
     @Test
-    fun modifyArgsPlaceholder() {
+    fun modifyArgsPacksArgs() {
         val code = apply("ArgsObject")
-        assertTrue(code.indexOf("this.changeArgs(null);") in 0 until code.indexOf(".send(var2, code);"))
+        assertContains(code, "Args args = new Args(new Object[]{var2, code});")
+        assertContains(code, "this.changeArgs(args);")
+        assertContains(code, ".send((String)args.get(0), (Integer)args.get(1));")
     }
 
     @Test
