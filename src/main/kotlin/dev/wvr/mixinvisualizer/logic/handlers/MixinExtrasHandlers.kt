@@ -2,8 +2,8 @@ package dev.wvr.mixinvisualizer.logic.handlers
 
 import dev.wvr.mixinvisualizer.logic.asm.AsmHelper
 import dev.wvr.mixinvisualizer.logic.util.AnnotationUtils
+import dev.wvr.mixinvisualizer.logic.util.InjectionPoints
 import dev.wvr.mixinvisualizer.logic.util.LocalsSupport
-import dev.wvr.mixinvisualizer.logic.util.SliceHelper
 import dev.wvr.mixinvisualizer.logic.util.TargetFinderUtils
 import org.objectweb.asm.Handle
 import org.objectweb.asm.Opcodes
@@ -154,28 +154,24 @@ internal object MixinExtrasSupport {
             Opcodes.GETFIELD, Opcodes.GETSTATIC -> Type.getType(insn.desc)
             else -> Type.VOID_TYPE
         }
-        else -> Type.VOID_TYPE
+        else -> when (val value = AsmHelper.constantValue(insn)) {
+            null -> Type.VOID_TYPE
+            AsmHelper.NULL_CONSTANT -> Type.getType(Any::class.java)
+            is Int -> Type.INT_TYPE
+            is Long -> Type.LONG_TYPE
+            is Float -> Type.FLOAT_TYPE
+            is Double -> Type.DOUBLE_TYPE
+            is String -> Type.getType(String::class.java)
+            is Type -> Type.getType(Class::class.java)
+            else -> Type.VOID_TYPE
+        }
     }
 
     fun findMatches(
         targetClass: ClassNode,
         targetMethod: MethodNode,
         annotation: AnnotationNode
-    ): List<AbstractInsnNode> {
-        val atTarget = AnnotationUtils.getAtValue(annotation, "target")
-        if (atTarget.isEmpty()) return emptyList()
-
-        val opcode = AnnotationUtils.getAtValue(annotation, "opcode").toIntOrNull() ?: -1
-        var all = targetMethod.instructions.toArray().filter { insn ->
-            (insn is MethodInsnNode && TargetFinderUtils.isMatch(insn, atTarget)) ||
-                    (insn is FieldInsnNode && TargetFinderUtils.isMatchField(insn, atTarget) && (opcode == -1 || insn.opcode == opcode))
-        }
-
-        all = SliceHelper.filterBySlice(targetClass, targetMethod, annotation, all)
-
-        val ordinal = AnnotationUtils.getAtValue(annotation, "ordinal").toIntOrNull() ?: -1
-        return if (ordinal >= 0) listOfNotNull(all.getOrNull(ordinal)) else all
-    }
+    ): List<AbstractInsnNode> = InjectionPoints.find(targetClass, targetMethod, annotation)
 }
 
 class ModifyExpressionValueHandler : MixinHandler {
@@ -198,11 +194,17 @@ class ModifyExpressionValueHandler : MixinHandler {
                 val valueType = MixinExtrasSupport.producedType(insn)
                 if (valueType.sort == Type.VOID) continue
 
+                val takesNothing = AsmHelper.constantValue(insn) != null || insn.opcode == Opcodes.GETSTATIC
+
                 val list = InsnList()
                 if (!isStatic) {
-                    val slots = AsmHelper.stashStack(list, listOf(valueType), targetMethod)
-                    list.add(VarInsnNode(Opcodes.ALOAD, 0))
-                    AsmHelper.unstashStack(list, listOf(valueType), slots)
+                    if (takesNothing) {
+                        targetMethod.instructions.insertBefore(insn, VarInsnNode(Opcodes.ALOAD, 0))
+                    } else {
+                        val slots = AsmHelper.stashStack(list, listOf(valueType), targetMethod)
+                        list.add(VarInsnNode(Opcodes.ALOAD, 0))
+                        AsmHelper.unstashStack(list, listOf(valueType), slots)
+                    }
                 }
                 MixinExtrasSupport.pushExtraArgs(list, sourceMethod, 1, targetClass, targetMethod)
                 list.add(MixinExtrasSupport.invokeHandler(targetClass, sourceMethod))

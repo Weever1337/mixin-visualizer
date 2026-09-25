@@ -3,7 +3,7 @@ package dev.wvr.mixinvisualizer.logic.handlers
 import dev.wvr.mixinvisualizer.logic.asm.AsmHelper
 import dev.wvr.mixinvisualizer.logic.util.AnnotationUtils
 import dev.wvr.mixinvisualizer.logic.util.CodeGenerationUtils
-import dev.wvr.mixinvisualizer.logic.util.SliceHelper
+import dev.wvr.mixinvisualizer.logic.util.InjectionPoints
 import dev.wvr.mixinvisualizer.logic.util.TargetFinderUtils
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
@@ -20,58 +20,21 @@ class InjectHandler : MixinHandler {
         annotation: AnnotationNode
     ) {
         val targets = AnnotationUtils.getListValue(annotation, "method")
-        var atValue = AnnotationUtils.getAtValue(annotation, "value")
-        val atTarget = AnnotationUtils.getAtValue(annotation, "target")
-
-        if (atValue.isEmpty()) atValue = "HEAD"
-
+        val atValue = AnnotationUtils.getAtValue(annotation, "value")
         val shift = AnnotationUtils.getAtValue(annotation, "shift")
-        val ordinal = AnnotationUtils.getAtValue(annotation, "ordinal").toIntOrNull() ?: -1
+        val by = AnnotationUtils.getAtValue(annotation, "by").toIntOrNull() ?: 0
         val captureLocals = ((AnnotationUtils.getValue(annotation, "locals") as? Array<*>)?.getOrNull(1) as? String)
             ?.startsWith("CAPTURE") == true
 
         val insertAfter = atValue == "INVOKE_ASSIGN" ||
-                (shift == "AFTER" && (atValue == "INVOKE" || atValue == "FIELD" || atValue == "NEW"))
+                (shift == "AFTER" && atValue != "HEAD" && atValue != "RETURN" && atValue != "TAIL")
 
         for (ref in targets) {
             val targetMethod = TargetFinderUtils.findTargetMethodLike(targetClass, ref) ?: continue
-            val insns = targetMethod.instructions.toArray()
 
-            var points: List<AbstractInsnNode> = when (atValue) {
-                "HEAD" -> listOfNotNull(AsmHelper.headInsn(targetClass, targetMethod))
-
-                "RETURN" -> insns.filter { it.opcode in Opcodes.IRETURN..Opcodes.RETURN }
-
-                "TAIL" -> listOfNotNull(insns.lastOrNull { it.opcode in Opcodes.IRETURN..Opcodes.RETURN })
-
-                "INVOKE" -> if (atTarget.isEmpty()) emptyList() else insns
-                    .filter { it is MethodInsnNode && TargetFinderUtils.isMatch(it, atTarget) }
-
-                "INVOKE_ASSIGN" -> if (atTarget.isEmpty()) emptyList() else insns
-                    .filter { it is MethodInsnNode && TargetFinderUtils.isMatch(it, atTarget) && Type.getReturnType(it.desc).sort != Type.VOID }
-
-                "FIELD" -> if (atTarget.isEmpty()) emptyList() else {
-                    val targetOpcode = AnnotationUtils.getAtValue(annotation, "opcode").toIntOrNull() ?: -1
-                    insns.filter {
-                        it is FieldInsnNode && TargetFinderUtils.isMatchField(it, atTarget) &&
-                                (targetOpcode == -1 || it.opcode == targetOpcode)
-                    }
-                }
-
-                "NEW" -> if (atTarget.isEmpty()) emptyList() else {
-                    val normalizedTarget = atTarget.replace('.', '/')
-                    insns.filter { it is TypeInsnNode && it.opcode == Opcodes.NEW && it.desc == normalizedTarget }
-                }
-
-                else -> emptyList()
-            }
-
-            if (atValue != "HEAD" && atValue != "TAIL") {
-                points = SliceHelper.filterBySlice(targetClass, targetMethod, annotation, points)
-                if (ordinal >= 0) points = listOfNotNull(points.getOrNull(ordinal))
-            }
-
+            var points = InjectionPoints.find(targetClass, targetMethod, annotation)
             if (atValue == "INVOKE_ASSIGN") points = points.map { assignedStore(it) ?: it }
+            if (shift == "BY") points = points.map { shiftBy(it, by) }
 
             val captureReturn = (atValue == "RETURN" || atValue == "TAIL") &&
                     Type.getReturnType(targetMethod.desc).sort != Type.VOID
@@ -92,6 +55,16 @@ class InjectHandler : MixinHandler {
                 targetMethod.tryCatchBlocks.addAll(data.tryCatchBlocks)
             }
         }
+    }
+
+    private fun shiftBy(insn: AbstractInsnNode, by: Int): AbstractInsnNode {
+        var p = insn
+        repeat(kotlin.math.abs(by)) {
+            var q = if (by > 0) p.next else p.previous
+            while (q != null && q.opcode == -1) q = if (by > 0) q.next else q.previous
+            p = q ?: return p
+        }
+        return p
     }
 
     private fun assignedStore(invoke: AbstractInsnNode): AbstractInsnNode? {

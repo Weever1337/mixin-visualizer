@@ -29,6 +29,12 @@ object AnnotationUtils {
         return emptyList()
     }
 
+    fun getAtNode(node: AnnotationNode): AnnotationNode? = when (val raw = getValue(node, "at")) {
+        is AnnotationNode -> raw
+        is List<*> -> raw.firstOrNull() as? AnnotationNode
+        else -> null
+    }
+
     fun getAtValue(node: AnnotationNode, subKey: String): String {
         val values = node.values ?: return ""
         for (i in 0 until values.size step 2) {
@@ -52,6 +58,83 @@ object AnnotationUtils {
             }
         }
         return ""
+    }
+}
+
+object InjectionPoints {
+    fun find(targetClass: ClassNode, method: MethodNode, annotation: AnnotationNode): List<AbstractInsnNode> {
+        val at = AnnotationUtils.getAtNode(annotation) ?: return emptyList()
+        val value = (AnnotationUtils.getValue(at, "value") as? String).orEmpty()
+        val target = when (val raw = AnnotationUtils.getValue(at, "target")) {
+            is String -> raw
+            is List<*> -> raw.firstOrNull()?.toString().orEmpty()
+            else -> ""
+        }
+        val opcode = AnnotationUtils.getValue(at, "opcode") as? Int ?: -1
+        val args = AnnotationUtils.getListValue(at, "args").associate { it.substringBefore('=') to it.substringAfter('=', "") }
+        val insns = method.instructions.toArray()
+
+        var points: List<AbstractInsnNode> = when (value.substringAfter(':')) {
+            "HEAD" -> listOfNotNull(AsmHelper.headInsn(targetClass, method))
+            "CTOR_HEAD" -> listOfNotNull(ctorHead(targetClass, method))
+            "RETURN" -> insns.filter { it.opcode in Opcodes.IRETURN..Opcodes.RETURN }
+            "TAIL" -> listOfNotNull(insns.lastOrNull { it.opcode in Opcodes.IRETURN..Opcodes.RETURN })
+            "INVOKE" -> insns.filter { it is MethodInsnNode && isMethod(it, target) }
+            "INVOKE_ASSIGN" -> insns.filter { it is MethodInsnNode && isMethod(it, target) && Type.getReturnType(it.desc).sort != Type.VOID }
+            "INVOKE_STRING" -> insns.filter { it is MethodInsnNode && isMethod(it, target) && ldcBefore(it) == args["ldc"] }
+            "FIELD" -> insns.filter {
+                it is FieldInsnNode && target.isNotEmpty() && TargetFinderUtils.isMatchField(it, target) && (opcode == -1 || it.opcode == opcode)
+            }
+            "NEW" -> {
+                val type = newType(target, args["class"])
+                insns.filter { it is TypeInsnNode && it.opcode == Opcodes.NEW && it.desc == type }
+            }
+            "CONSTANT" -> insns.filter { isConstant(it, args) }
+            "JUMP" -> insns.filter { it is JumpInsnNode && (opcode == -1 || it.opcode == opcode) }
+            else -> emptyList()
+        }
+
+        if (value != "HEAD" && value != "TAIL" && value.substringAfter(':') != "CTOR_HEAD") {
+            points = SliceHelper.filterBySlice(targetClass, method, annotation, points)
+            val ordinal = AnnotationUtils.getValue(at, "ordinal") as? Int ?: -1
+            if (ordinal >= 0) points = listOfNotNull(points.getOrNull(ordinal))
+        }
+        return points
+    }
+
+    private fun isMethod(insn: MethodInsnNode, target: String) = target.isNotEmpty() && TargetFinderUtils.isMatch(insn, target)
+
+    private fun ctorHead(targetClass: ClassNode, method: MethodNode): AbstractInsnNode? {
+        if (method.name != "<init>") return null
+        val call = method.instructions.toArray().firstOrNull {
+            it is MethodInsnNode && it.opcode == Opcodes.INVOKESPECIAL && it.name == "<init>" &&
+                    (it.owner == targetClass.superName || it.owner == targetClass.name)
+        }
+        return call?.next
+    }
+
+    private fun ldcBefore(insn: AbstractInsnNode): Any? {
+        var p = insn.previous
+        while (p != null && p.opcode == -1) p = p.previous
+        return (p as? LdcInsnNode)?.cst
+    }
+
+    private fun newType(target: String, classArg: String?): String {
+        val raw = classArg ?: target
+        if (raw.startsWith("(")) return Type.getReturnType(raw).internalName
+        return raw.removePrefix("L").removeSuffix(";").replace('.', '/')
+    }
+
+    private fun isConstant(insn: AbstractInsnNode, args: Map<String, String>): Boolean {
+        val value = AsmHelper.constantValue(insn) ?: return false
+        if (args["nullValue"] == "true") return value === AsmHelper.NULL_CONSTANT
+        args["intValue"]?.let { return value == it.toIntOrNull() }
+        args["floatValue"]?.let { return value == it.toFloatOrNull() }
+        args["longValue"]?.let { return value == it.toLongOrNull() }
+        args["doubleValue"]?.let { return value == it.toDoubleOrNull() }
+        args["stringValue"]?.let { return value == it }
+        args["classValue"]?.let { return value is Type && value.internalName == it.replace('.', '/') }
+        return value !== AsmHelper.NULL_CONSTANT
     }
 }
 

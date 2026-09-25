@@ -2,6 +2,7 @@ package dev.wvr.mixinvisualizer.logic.handlers
 
 import dev.wvr.mixinvisualizer.logic.asm.AsmHelper
 import dev.wvr.mixinvisualizer.logic.util.AnnotationUtils
+import dev.wvr.mixinvisualizer.logic.util.InjectionPoints
 import dev.wvr.mixinvisualizer.logic.util.SliceHelper
 import dev.wvr.mixinvisualizer.logic.util.TargetFinderUtils
 import org.objectweb.asm.Opcodes
@@ -34,14 +35,14 @@ class ModifyConstantHandler : MixinHandler {
 
             val constants = SliceHelper.filterBySlice(
                 targetClass, targetMethod, annotation,
-                targetMethod.instructions.toArray().filter { constantValue(it) != null }
+                targetMethod.instructions.toArray().filter { AsmHelper.constantValue(it) != null }
             )
 
             val matches = if (selectors.isEmpty()) {
-                constants.filter { isTypeMatch(constantValue(it)!!, valueType) }
+                constants.filter { isTypeMatch(AsmHelper.constantValue(it)!!, valueType) }
             } else {
                 selectors.flatMap { selector ->
-                    val found = constants.filter { matchesSelector(constantValue(it)!!, selector, valueType) }
+                    val found = constants.filter { matchesSelector(AsmHelper.constantValue(it)!!, selector, valueType) }
                     val ordinal = AnnotationUtils.getValue(selector, "ordinal") as? Int ?: -1
                     if (ordinal >= 0) listOfNotNull(found.getOrNull(ordinal)) else found
                 }.distinct()
@@ -66,19 +67,8 @@ class ModifyConstantHandler : MixinHandler {
         }
     }
 
-    private fun constantValue(insn: AbstractInsnNode): Any? = when (insn.opcode) {
-        Opcodes.ACONST_NULL -> NULL_CONSTANT
-        in Opcodes.ICONST_M1..Opcodes.ICONST_5 -> insn.opcode - Opcodes.ICONST_0
-        Opcodes.LCONST_0, Opcodes.LCONST_1 -> (insn.opcode - Opcodes.LCONST_0).toLong()
-        Opcodes.FCONST_0, Opcodes.FCONST_1, Opcodes.FCONST_2 -> (insn.opcode - Opcodes.FCONST_0).toFloat()
-        Opcodes.DCONST_0, Opcodes.DCONST_1 -> (insn.opcode - Opcodes.DCONST_0).toDouble()
-        Opcodes.BIPUSH, Opcodes.SIPUSH -> (insn as IntInsnNode).operand
-        Opcodes.LDC -> (insn as LdcInsnNode).cst
-        else -> null
-    }
-
     private fun matchesSelector(value: Any, selector: AnnotationNode, type: Type): Boolean {
-        if (AnnotationUtils.getValue(selector, "nullValue") == true) return value === NULL_CONSTANT
+        if (AnnotationUtils.getValue(selector, "nullValue") == true) return value === AsmHelper.NULL_CONSTANT
         for (key in VALUE_KEYS) {
             val expected = AnnotationUtils.getValue(selector, key) ?: continue
             return value == expected
@@ -97,7 +87,6 @@ class ModifyConstantHandler : MixinHandler {
     }
 
     companion object {
-        private val NULL_CONSTANT = Any()
         private val VALUE_KEYS = listOf("intValue", "floatValue", "longValue", "doubleValue", "stringValue", "classValue")
     }
 }
@@ -126,15 +115,11 @@ class ModifyVariableHandler : MixinHandler {
             val insns = targetMethod.instructions.toArray()
 
             var points: List<AbstractInsnNode> = when (atValue) {
-                "HEAD" -> listOfNotNull(AsmHelper.headInsn(targetClass, targetMethod))
-                "RETURN" -> insns.filter { it.opcode in Opcodes.IRETURN..Opcodes.RETURN }
-                "TAIL" -> listOfNotNull(insns.lastOrNull { it.opcode in Opcodes.IRETURN..Opcodes.RETURN })
                 "STORE" -> insns.filter { it is VarInsnNode && it.`var` == slot && it.opcode == varType.getOpcode(Opcodes.ISTORE) }
                 "LOAD" -> insns.filter { it is VarInsnNode && it.`var` == slot && it.opcode == varType.getOpcode(Opcodes.ILOAD) }
-                "INVOKE", "FIELD" -> MixinExtrasSupport.findMatches(targetClass, targetMethod, annotation)
-                else -> emptyList()
+                else -> InjectionPoints.find(targetClass, targetMethod, annotation)
             }
-            if (atValue != "INVOKE" && atValue != "FIELD") {
+            if (atValue == "STORE" || atValue == "LOAD") {
                 points = SliceHelper.filterBySlice(targetClass, targetMethod, annotation, points)
                 if (atOrdinal >= 0) points = listOfNotNull(points.getOrNull(atOrdinal))
             }

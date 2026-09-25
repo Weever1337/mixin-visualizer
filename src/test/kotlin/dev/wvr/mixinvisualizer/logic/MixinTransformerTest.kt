@@ -88,6 +88,38 @@ class MixinTransformerTest {
     }
 
     @Test
+    fun injectAtConstant() {
+        val code = apply("InjectConstant")
+        assertTrue(code.indexOf("this.helper.doWork(local)") < code.indexOf("println(\"const\")"))
+    }
+
+    @Test
+    fun modifyExpressionValueAtConstant() {
+        assertContains(apply("ExprConstant"), "this.bigger(20)")
+    }
+
+    @Test
+    fun injectAtJump() {
+        val code = apply("InjectJump")
+        assertTrue(code.indexOf("isReady()") < code.indexOf("println(\"jump\")"))
+        assertTrue(code.indexOf("println(\"jump\")") < code.indexOf("doWork(local)"))
+    }
+
+    @Test
+    fun injectShiftBy() {
+        val code = apply("InjectShiftBy")
+        assertTrue(code.indexOf("if (this.helper.isReady())") < code.indexOf("println(\"shifted\")"))
+        assertTrue(code.indexOf("println(\"shifted\")") < code.indexOf("doWork(local)"))
+    }
+
+    @Test
+    fun injectCtorHead() {
+        val code = apply("InjectCtorHead")
+        val println = code.indexOf("println(\"ctor\")")
+        assertTrue(println in code.indexOf("public Target()") until code.indexOf("public void tick()"))
+    }
+
+    @Test
     fun injectReturnValue() {
         val code = apply("ReturnPeek")
         assertFalse(code.contains("cir"))

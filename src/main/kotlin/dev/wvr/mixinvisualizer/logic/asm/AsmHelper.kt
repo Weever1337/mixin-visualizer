@@ -185,6 +185,19 @@ object AsmHelper {
         }
     }
 
+    val NULL_CONSTANT = Any()
+
+    fun constantValue(insn: AbstractInsnNode): Any? = when (insn.opcode) {
+        Opcodes.ACONST_NULL -> NULL_CONSTANT
+        in Opcodes.ICONST_M1..Opcodes.ICONST_5 -> insn.opcode - Opcodes.ICONST_0
+        Opcodes.LCONST_0, Opcodes.LCONST_1 -> (insn.opcode - Opcodes.LCONST_0).toLong()
+        Opcodes.FCONST_0, Opcodes.FCONST_1, Opcodes.FCONST_2 -> (insn.opcode - Opcodes.FCONST_0).toFloat()
+        Opcodes.DCONST_0, Opcodes.DCONST_1 -> (insn.opcode - Opcodes.DCONST_0).toDouble()
+        Opcodes.BIPUSH, Opcodes.SIPUSH -> (insn as IntInsnNode).operand
+        Opcodes.LDC -> (insn as LdcInsnNode).cst
+        else -> null
+    }
+
     fun pushInt(value: Int): AbstractInsnNode = when (value) {
         in -1..5 -> InsnNode(Opcodes.ICONST_0 + value)
         in Byte.MIN_VALUE..Byte.MAX_VALUE -> IntInsnNode(Opcodes.BIPUSH, value)

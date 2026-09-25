@@ -231,6 +231,46 @@ public class Mixins {
     }
 
     @Mixin(Target.class)
+    public static class InjectConstant {
+        @Inject(method = "tick", at = @At(value = "CONSTANT", args = "intValue=20"))
+        private void beforeTwenty(CallbackInfo ci) {
+            System.out.println("const");
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class ExprConstant {
+        @ModifyExpressionValue(method = "tick", at = @At(value = "CONSTANT", args = "intValue=20"))
+        private int bigger(int original) {
+            return original * 2;
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class InjectJump {
+        @Inject(method = "tick", at = @At(value = "JUMP", opcode = Opcodes.IFEQ))
+        private void beforeJump(CallbackInfo ci) {
+            System.out.println("jump");
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class InjectShiftBy {
+        @Inject(method = "tick", at = @At(value = "INVOKE", target = "Lfixtures/Target$Helper;isReady()Z", shift = At.Shift.BY, by = 2))
+        private void shifted(CallbackInfo ci) {
+            System.out.println("shifted");
+        }
+    }
+
+    @Mixin(Target.class)
+    public static class InjectCtorHead {
+        @Inject(method = "<init>", at = @At("CTOR_HEAD"))
+        private void ctorHead(CallbackInfo ci) {
+            System.out.println("ctor");
+        }
+    }
+
+    @Mixin(Target.class)
     public static class ArgFromAll {
         @ModifyArg(method = "report", at = @At(value = "INVOKE", target = "Lfixtures/Target$Helper;send(Ljava/lang/String;I)V"), index = 1)
         private int withKey(String key, int value) {
