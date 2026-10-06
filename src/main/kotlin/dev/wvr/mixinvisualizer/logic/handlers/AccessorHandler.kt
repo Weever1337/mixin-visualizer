@@ -7,7 +7,8 @@ import org.objectweb.asm.tree.*
 import java.util.*
 
 class AccessorHandler : MixinHandler {
-    override fun canHandle(annotationDesc: String): Boolean = annotationDesc.contains("Accessor")
+    override fun canHandle(annotationDesc: String): Boolean =
+        AnnotationUtils.simpleName(annotationDesc) == "Accessor"
 
     override fun handle(
         targetClass: ClassNode,
@@ -56,7 +57,6 @@ class AccessorHandler : MixinHandler {
                 insns.add(FieldInsnNode(Opcodes.PUTFIELD, targetClass.name, targetField.name, targetField.desc))
             } else {
                 insns.add(VarInsnNode(methodArgs[0].getOpcode(Opcodes.ILOAD), 0))
-                //val varIndex = if ((sourceMethod.access and Opcodes.ACC_STATIC) != 0) 0 else 1
                 insns.add(FieldInsnNode(Opcodes.PUTSTATIC, targetClass.name, targetField.name, targetField.desc))
             }
             insns.add(InsnNode(Opcodes.RETURN))

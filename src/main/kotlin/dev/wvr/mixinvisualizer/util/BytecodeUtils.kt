@@ -22,28 +22,19 @@ object BytecodeUtils {
     fun readClassNode(bytes: ByteArray): ClassNode {
         val reader = ClassReader(bytes)
         val node = ClassNode()
-        reader.accept(node, 0)
+        reader.accept(node, ClassReader.SKIP_FRAMES)
         return node
     }
 
     fun writeClassNode(node: ClassNode): ByteArray {
-        val writer = object : ClassWriter(COMPUTE_FRAMES) {
-            override fun getCommonSuperClass(type1: String, type2: String): String {
-                return try {
-                    super.getCommonSuperClass(type1, type2)
-                } catch (e: Exception) {
-                    "java/lang/Object"
-                }
-            }
-        }
-
         try {
+            val writer = ClassWriter(ClassWriter.COMPUTE_MAXS)
             node.accept(writer)
             return writer.toByteArray()
         } catch (_: Throwable) {
-            val simpleWriter = ClassWriter(ClassWriter.COMPUTE_MAXS)
-            node.accept(simpleWriter)
-            return simpleWriter.toByteArray()
+            val plainWriter = ClassWriter(0)
+            node.accept(plainWriter)
+            return plainWriter.toByteArray()
         }
     }
 
@@ -110,7 +101,7 @@ object BytecodeUtils {
             "rbr" to "0",    // hide bridge methods
             "rsy" to "0",    // hide synthetic members
             "ind" to "    ", // 4 spaces
-            "bto" to "1",    // bytecode-to-object only (memory)
+            "bto" to "1",    // ints 0/1 as booleans
             "nco" to "1",    // pattern matching instanceOf (cleaner code)
             "hdc" to "0",     // hide empty default constructor
             "udv" to "1"

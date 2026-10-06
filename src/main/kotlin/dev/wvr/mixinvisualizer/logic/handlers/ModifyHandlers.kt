@@ -2,6 +2,7 @@ package dev.wvr.mixinvisualizer.logic.handlers
 
 import dev.wvr.mixinvisualizer.logic.asm.AsmHelper
 import dev.wvr.mixinvisualizer.logic.util.AnnotationUtils
+import dev.wvr.mixinvisualizer.logic.util.InjectionPoints
 import dev.wvr.mixinvisualizer.logic.util.SliceHelper
 import dev.wvr.mixinvisualizer.logic.util.TargetFinderUtils
 import org.objectweb.asm.Opcodes
@@ -9,7 +10,8 @@ import org.objectweb.asm.Type
 import org.objectweb.asm.tree.*
 
 class ModifyConstantHandler : MixinHandler {
-    override fun canHandle(annotationDesc: String): Boolean = annotationDesc.contains("ModifyConstant")
+    override fun canHandle(annotationDesc: String): Boolean =
+        AnnotationUtils.simpleName(annotationDesc) == "ModifyConstant"
 
     override fun handle(
         targetClass: ClassNode,
@@ -18,71 +20,80 @@ class ModifyConstantHandler : MixinHandler {
         annotation: AnnotationNode
     ) {
         val targets = AnnotationUtils.getListValue(annotation, "method")
-        val copiedMethodName = copyMethodToTarget(targetClass, mixinClass, sourceMethod)
+        val handlerName = copyMethodToTarget(targetClass, mixinClass, sourceMethod)
+        val valueType = Type.getReturnType(sourceMethod.desc)
+        val isStatic = (sourceMethod.access and Opcodes.ACC_STATIC) != 0
+
+        val selectors = when (val raw = AnnotationUtils.getValue(annotation, "constant")) {
+            is AnnotationNode -> listOf(raw)
+            is List<*> -> raw.filterIsInstance<AnnotationNode>()
+            else -> emptyList()
+        }
 
         for (ref in targets) {
             val targetMethod = TargetFinderUtils.findTargetMethodLike(targetClass, ref) ?: continue
-            val (start, end) = SliceHelper.getSliceRange(targetClass, targetMethod, annotation)
 
-            val iter = targetMethod.instructions.iterator()
-            var started = (start == null)
+            val constants = SliceHelper.filterBySlice(
+                targetClass, targetMethod, annotation,
+                targetMethod.instructions.toArray().filter { AsmHelper.constantValue(it) != null }
+            )
 
-            while (iter.hasNext()) {
-                val insn = iter.next()
-                if (insn == start) started = true
-                if (insn == end) break
-                if (!started) continue
+            val matches = if (selectors.isEmpty()) {
+                constants.filter { isTypeMatch(AsmHelper.constantValue(it)!!, valueType) }
+            } else {
+                selectors.flatMap { selector ->
+                    val found = constants.filter { matchesSelector(AsmHelper.constantValue(it)!!, selector, valueType) }
+                    val ordinal = AnnotationUtils.getValue(selector, "ordinal") as? Int ?: -1
+                    if (ordinal >= 0) listOfNotNull(found.getOrNull(ordinal)) else found
+                }.distinct()
+            }
 
-                if (isConstant(insn)) {
-                    val returnType = Type.getReturnType(sourceMethod.desc)
-                    if (isConstantTypeMatch(insn, returnType)) {
-                        val call = MethodInsnNode(
-                            if ((sourceMethod.access and Opcodes.ACC_STATIC) != 0) Opcodes.INVOKESTATIC else Opcodes.INVOKEVIRTUAL,
-                            targetClass.name,
-                            copiedMethodName,
-                            sourceMethod.desc,
-                            false
-                        )
+            for (insn in matches) {
+                if (!isStatic) targetMethod.instructions.insertBefore(insn, VarInsnNode(Opcodes.ALOAD, 0))
 
-                        val list = InsnList()
-                        if ((sourceMethod.access and Opcodes.ACC_STATIC) == 0) {
-                            list.add(VarInsnNode(Opcodes.ALOAD, 0))
-                            list.add(InsnNode(Opcodes.SWAP))
-                        }
-                        list.add(call)
-
-                        targetMethod.instructions.insert(insn, list)
-                        targetMethod.instructions.remove(insn)
-                    }
-                }
+                val list = InsnList()
+                MixinExtrasSupport.pushExtraArgs(list, sourceMethod, 1, targetClass, targetMethod)
+                list.add(
+                    MethodInsnNode(
+                        if (isStatic) Opcodes.INVOKESTATIC else Opcodes.INVOKEVIRTUAL,
+                        targetClass.name,
+                        handlerName,
+                        sourceMethod.desc,
+                        false
+                    )
+                )
+                targetMethod.instructions.insert(insn, list)
             }
         }
     }
 
-    private fun isConstant(node: AbstractInsnNode): Boolean {
-        return node is LdcInsnNode ||
-                (node.opcode in Opcodes.ICONST_M1..Opcodes.ICONST_5) ||
-                (node.opcode in Opcodes.LCONST_0..Opcodes.LCONST_1) ||
-                (node.opcode in Opcodes.FCONST_0..Opcodes.FCONST_2) ||
-                (node.opcode in Opcodes.DCONST_0..Opcodes.DCONST_1) ||
-                node.opcode == Opcodes.BIPUSH || node.opcode == Opcodes.SIPUSH
+    private fun matchesSelector(value: Any, selector: AnnotationNode, type: Type): Boolean {
+        if (AnnotationUtils.getValue(selector, "nullValue") == true) return value === AsmHelper.NULL_CONSTANT
+        for (key in VALUE_KEYS) {
+            val expected = AnnotationUtils.getValue(selector, key) ?: continue
+            return value == expected
+        }
+        return isTypeMatch(value, type)
     }
 
-    private fun isConstantTypeMatch(node: AbstractInsnNode, type: Type): Boolean {
-        if (type == Type.INT_TYPE || type == Type.BYTE_TYPE || type == Type.SHORT_TYPE) {
-            return node.opcode in Opcodes.ICONST_M1..Opcodes.ICONST_5 || node.opcode == Opcodes.BIPUSH || node.opcode == Opcodes.SIPUSH || (node is LdcInsnNode && node.cst is Int)
-        }
-        if (type == Type.FLOAT_TYPE) return node.opcode in Opcodes.FCONST_0..Opcodes.FCONST_2 || (node is LdcInsnNode && node.cst is Float)
-        if (type == Type.LONG_TYPE) return node.opcode in Opcodes.LCONST_0..Opcodes.LCONST_1 || (node is LdcInsnNode && node.cst is Long)
-        if (type == Type.DOUBLE_TYPE) return node.opcode in Opcodes.DCONST_0..Opcodes.DCONST_1 || (node is LdcInsnNode && node.cst is Double)
-        if (type == Type.getType(String::class.java)) return node is LdcInsnNode && node.cst is String
-        if (type.sort == Type.OBJECT && node is LdcInsnNode && node.cst is Type) return true
-        return false
+    private fun isTypeMatch(value: Any, type: Type): Boolean = when (type.sort) {
+        Type.INT, Type.SHORT, Type.BYTE, Type.CHAR, Type.BOOLEAN -> value is Int
+        Type.FLOAT -> value is Float
+        Type.LONG -> value is Long
+        Type.DOUBLE -> value is Double
+        Type.OBJECT -> (value is String && type.internalName == "java/lang/String") ||
+                (value is Type && type.internalName == "java/lang/Class")
+        else -> false
+    }
+
+    companion object {
+        private val VALUE_KEYS = listOf("intValue", "floatValue", "longValue", "doubleValue", "stringValue", "classValue")
     }
 }
 
 class ModifyVariableHandler : MixinHandler {
-    override fun canHandle(annotationDesc: String): Boolean = annotationDesc.contains("ModifyVariable")
+    override fun canHandle(annotationDesc: String): Boolean =
+        AnnotationUtils.simpleName(annotationDesc) == "ModifyVariable"
 
     override fun handle(
         targetClass: ClassNode,
@@ -92,75 +103,89 @@ class ModifyVariableHandler : MixinHandler {
     ) {
         val targets = AnnotationUtils.getListValue(annotation, "method")
         val atValue = AnnotationUtils.getAtValue(annotation, "value")
-        val ordinal = AnnotationUtils.getValue(annotation, "ordinal") as? Int ?: -1
+        val atOrdinal = AnnotationUtils.getAtValue(annotation, "ordinal").toIntOrNull() ?: -1
+        val varType = Type.getReturnType(sourceMethod.desc)
+        val isStatic = (sourceMethod.access and Opcodes.ACC_STATIC) != 0
 
-        val copiedMethodName = copyMethodToTarget(targetClass, mixinClass, sourceMethod)
+        val handlerName = copyMethodToTarget(targetClass, mixinClass, sourceMethod)
 
         for (ref in targets) {
             val targetMethod = TargetFinderUtils.findTargetMethodLike(targetClass, ref) ?: continue
-            val (start, end) = SliceHelper.getSliceRange(targetClass, targetMethod, annotation)
+            val slot = findSlot(targetMethod, annotation, varType) ?: continue
+            val insns = targetMethod.instructions.toArray()
 
-            val targetVarType = Type.getReturnType(sourceMethod.desc)
+            var points: List<AbstractInsnNode> = when (atValue) {
+                "STORE" -> insns.filter { it is VarInsnNode && it.`var` == slot && it.opcode == varType.getOpcode(Opcodes.ISTORE) }
+                "LOAD" -> insns.filter { it is VarInsnNode && it.`var` == slot && it.opcode == varType.getOpcode(Opcodes.ILOAD) }
+                else -> InjectionPoints.find(targetClass, targetMethod, annotation)
+            }
+            if (atValue == "STORE" || atValue == "LOAD") {
+                points = SliceHelper.filterBySlice(targetClass, targetMethod, annotation, points)
+                if (atOrdinal >= 0) points = listOfNotNull(points.getOrNull(atOrdinal))
+            }
 
-            var currentOrdinal = 0
-            val iter = targetMethod.instructions.iterator()
-            var started = (start == null)
+            for (point in points) {
+                val list = InsnList()
+                if (!isStatic) list.add(VarInsnNode(Opcodes.ALOAD, 0))
+                list.add(VarInsnNode(varType.getOpcode(Opcodes.ILOAD), slot))
+                MixinExtrasSupport.pushExtraArgs(list, sourceMethod, 1, targetClass, targetMethod)
+                list.add(
+                    MethodInsnNode(
+                        if (isStatic) Opcodes.INVOKESTATIC else Opcodes.INVOKEVIRTUAL,
+                        targetClass.name,
+                        handlerName,
+                        sourceMethod.desc,
+                        false
+                    )
+                )
+                list.add(VarInsnNode(varType.getOpcode(Opcodes.ISTORE), slot))
 
-            while (iter.hasNext()) {
-                val insn = iter.next()
-                if (insn == start) started = true
-                if (insn == end) break
-                if (!started) continue
-
-                val isStore = (atValue == "STORE" && isStoreOpcode(insn.opcode))
-                val isLoad = (atValue == "LOAD" && isLoadOpcode(insn.opcode))
-
-                if (isStore || isLoad) {
-                    val varInsn = insn as VarInsnNode
-
-                    if (ordinal == -1 || currentOrdinal == ordinal) {
-                        val list = InsnList()
-                        val isStatic = (sourceMethod.access and Opcodes.ACC_STATIC) != 0
-
-                        list.add(VarInsnNode(targetVarType.getOpcode(Opcodes.ILOAD), varInsn.`var`))
-
-                        if (!isStatic) {
-                            list.add(VarInsnNode(Opcodes.ALOAD, 0))
-                            list.add(InsnNode(Opcodes.SWAP))
-                        }
-
-                        list.add(
-                            MethodInsnNode(
-                                if (isStatic) Opcodes.INVOKESTATIC else Opcodes.INVOKEVIRTUAL,
-                                targetClass.name,
-                                copiedMethodName,
-                                sourceMethod.desc,
-                                false
-                            )
-                        )
-
-                        list.add(VarInsnNode(targetVarType.getOpcode(Opcodes.ISTORE), varInsn.`var`))
-
-                        if (isStore) {
-                            targetMethod.instructions.insert(insn, list)
-                        } else {
-                            targetMethod.instructions.insertBefore(insn, list)
-                        }
-
-                        if (ordinal != -1) break
-                    }
-                    currentOrdinal++
-                }
+                if (atValue == "STORE") targetMethod.instructions.insert(point, list)
+                else targetMethod.instructions.insertBefore(point, list)
             }
         }
     }
 
-    private fun isStoreOpcode(op: Int) = op in Opcodes.ISTORE..Opcodes.ASTORE
-    private fun isLoadOpcode(op: Int) = op in Opcodes.ILOAD..Opcodes.ALOAD
+    private class Variable(val slot: Int, val desc: String, val name: String?)
+
+    private fun findSlot(method: MethodNode, annotation: AnnotationNode, type: Type): Int? {
+        val index = AnnotationUtils.getValue(annotation, "index") as? Int ?: -1
+        if (index >= 0) return index
+
+        val argsOnly = AnnotationUtils.getValue(annotation, "argsOnly") == true
+        val candidates = variables(method, argsOnly).filter { it.desc == type.descriptor }
+
+        val names = AnnotationUtils.getListValue(annotation, "name")
+        if (names.isNotEmpty()) return candidates.firstOrNull { it.name in names }?.slot
+
+        val ordinal = AnnotationUtils.getValue(annotation, "ordinal") as? Int ?: -1
+        if (ordinal >= 0) return candidates.getOrNull(ordinal)?.slot
+
+        return candidates.singleOrNull()?.slot
+    }
+
+    private fun variables(method: MethodNode, argsOnly: Boolean): List<Variable> {
+        val lvt = method.localVariables ?: emptyList()
+        val result = mutableListOf<Variable>()
+
+        var slot = if ((method.access and Opcodes.ACC_STATIC) != 0) 0 else 1
+        for (arg in Type.getArgumentTypes(method.desc)) {
+            result.add(Variable(slot, arg.descriptor, lvt.firstOrNull { it.index == slot }?.name))
+            slot += arg.size
+        }
+        if (argsOnly) return result
+
+        lvt.filter { it.index >= slot }
+            .sortedBy { it.index }
+            .distinctBy { it.index to it.desc }
+            .forEach { result.add(Variable(it.index, it.desc, it.name)) }
+        return result
+    }
 }
 
 class ModifyArgHandler : MixinHandler {
-    override fun canHandle(annotationDesc: String): Boolean = annotationDesc.contains("ModifyArg")
+    override fun canHandle(annotationDesc: String): Boolean =
+        AnnotationUtils.simpleName(annotationDesc) == "ModifyArg"
 
     override fun handle(
         targetClass: ClassNode,
@@ -169,20 +194,125 @@ class ModifyArgHandler : MixinHandler {
         annotation: AnnotationNode
     ) {
         val targets = AnnotationUtils.getListValue(annotation, "method")
-        val atTarget = AnnotationUtils.getAtValue(annotation, "target")
-        val index = AnnotationUtils.getValue(annotation, "index") as? Int ?: 0
+        val explicitIndex = AnnotationUtils.getValue(annotation, "index") as? Int ?: -1
+        val isStatic = (sourceMethod.access and Opcodes.ACC_STATIC) != 0
+        val handlerValueType = Type.getReturnType(sourceMethod.desc)
 
         for (ref in targets) {
             val targetMethod = TargetFinderUtils.findTargetMethodLike(targetClass, ref) ?: continue
-            val iter = targetMethod.instructions.iterator()
-            while (iter.hasNext()) {
-                val insn = iter.next()
-                if (insn is MethodInsnNode && TargetFinderUtils.isMatch(insn, atTarget)) {
-                    val comment = InsnList()
-                    comment.add(LdcInsnNode(">>> @ModifyArg(index=$index) applied here calling ${sourceMethod.name} <<<"))
-                    comment.add(InsnNode(Opcodes.POP))
-                    targetMethod.instructions.insertBefore(insn, comment)
+
+            val matches = MixinExtrasSupport.findMatches(targetClass, targetMethod, annotation)
+                .filterIsInstance<MethodInsnNode>()
+
+            for (insn in matches) {
+                val argTypes = Type.getArgumentTypes(insn.desc).toList()
+
+                val index = if (explicitIndex >= 0) explicitIndex
+                else argTypes.indexOfFirst { it == handlerValueType }
+                if (index !in argTypes.indices) continue
+
+                val list = InsnList()
+                if (takesAllArgs(sourceMethod, argTypes)) {
+                    val argSlots = AsmHelper.stashStack(list, argTypes, targetMethod)
+                    if (!isStatic) list.add(VarInsnNode(Opcodes.ALOAD, 0))
+                    AsmHelper.unstashStack(list, argTypes, argSlots)
+                    MixinExtrasSupport.pushExtraArgs(list, sourceMethod, argTypes.size, targetClass, targetMethod)
+                    list.add(MixinExtrasSupport.invokeHandler(targetClass, sourceMethod))
+
+                    val valueSlot = AsmHelper.stashStack(list, listOf(argTypes[index]), targetMethod)
+                    AsmHelper.unstashStack(list, argTypes.take(index), argSlots.copyOfRange(0, index))
+                    AsmHelper.unstashStack(list, listOf(argTypes[index]), valueSlot)
+                    AsmHelper.unstashStack(list, argTypes.drop(index + 1), argSlots.copyOfRange(index + 1, argTypes.size))
+                } else {
+                    val tailTypes = argTypes.drop(index + 1)
+                    val valueType = argTypes[index]
+                    val tailSlots = AsmHelper.stashStack(list, tailTypes, targetMethod)
+
+                    if (!isStatic) {
+                        val valueSlots = AsmHelper.stashStack(list, listOf(valueType), targetMethod)
+                        list.add(VarInsnNode(Opcodes.ALOAD, 0))
+                        AsmHelper.unstashStack(list, listOf(valueType), valueSlots)
+                    }
+                    MixinExtrasSupport.pushExtraArgs(list, sourceMethod, 1, targetClass, targetMethod)
+                    list.add(MixinExtrasSupport.invokeHandler(targetClass, sourceMethod))
+
+                    AsmHelper.unstashStack(list, tailTypes, tailSlots)
                 }
+
+                targetMethod.instructions.insertBefore(insn, list)
+            }
+        }
+    }
+
+    private fun takesAllArgs(handler: MethodNode, argTypes: List<Type>): Boolean {
+        val handlerArgs = Type.getArgumentTypes(handler.desc)
+        return argTypes.size > 1 && handlerArgs.size >= argTypes.size && argTypes.indices.all { handlerArgs[it] == argTypes[it] }
+    }
+}
+
+class ModifyArgsHandler : MixinHandler {
+    companion object {
+        private const val ARGS = "org/spongepowered/asm/mixin/injection/invoke/arg/Args"
+    }
+
+    override fun canHandle(annotationDesc: String): Boolean =
+        AnnotationUtils.simpleName(annotationDesc) == "ModifyArgs"
+
+    override fun handle(
+        targetClass: ClassNode,
+        mixinClass: ClassNode,
+        sourceMethod: MethodNode,
+        annotation: AnnotationNode
+    ) {
+        val targets = AnnotationUtils.getListValue(annotation, "method")
+        val isStatic = (sourceMethod.access and Opcodes.ACC_STATIC) != 0
+
+        for (ref in targets) {
+            val targetMethod = TargetFinderUtils.findTargetMethodLike(targetClass, ref) ?: continue
+
+            for (insn in MixinExtrasSupport.findMatches(targetClass, targetMethod, annotation)) {
+                if (insn !is MethodInsnNode) continue
+                val argTypes = Type.getArgumentTypes(insn.desc).toList()
+
+                val list = InsnList()
+                val argSlots = AsmHelper.stashStack(list, argTypes, targetMethod)
+
+                val argsSlot = targetMethod.maxLocals
+                targetMethod.maxLocals += 1
+                list.add(TypeInsnNode(Opcodes.NEW, ARGS))
+                list.add(InsnNode(Opcodes.DUP))
+                list.add(AsmHelper.pushInt(argTypes.size))
+                list.add(TypeInsnNode(Opcodes.ANEWARRAY, "java/lang/Object"))
+                for (i in argTypes.indices) {
+                    list.add(InsnNode(Opcodes.DUP))
+                    list.add(AsmHelper.pushInt(i))
+                    list.add(VarInsnNode(argTypes[i].getOpcode(Opcodes.ILOAD), argSlots[i]))
+                    AsmHelper.box(list, argTypes[i])
+                    list.add(InsnNode(Opcodes.AASTORE))
+                }
+                list.add(MethodInsnNode(Opcodes.INVOKESPECIAL, ARGS, "<init>", "([Ljava/lang/Object;)V", false))
+                list.add(VarInsnNode(Opcodes.ASTORE, argsSlot))
+
+                val start = LabelNode()
+                val end = LabelNode()
+                list.add(start)
+                if (!isStatic) list.add(VarInsnNode(Opcodes.ALOAD, 0))
+                list.add(VarInsnNode(Opcodes.ALOAD, argsSlot))
+                MixinExtrasSupport.pushExtraArgs(list, sourceMethod, 1, targetClass, targetMethod)
+                list.add(MixinExtrasSupport.invokeHandler(targetClass, sourceMethod))
+
+                for (i in argTypes.indices) {
+                    list.add(VarInsnNode(Opcodes.ALOAD, argsSlot))
+                    list.add(AsmHelper.pushInt(i))
+                    list.add(MethodInsnNode(Opcodes.INVOKEVIRTUAL, ARGS, "get", "(I)Ljava/lang/Object;", false))
+                    AsmHelper.unbox(list, argTypes[i])
+                }
+                list.add(end)
+
+                if (targetMethod.localVariables == null) targetMethod.localVariables = ArrayList()
+                targetMethod.localVariables.add(LocalVariableNode("args", "L$ARGS;", null, start, end, argsSlot))
+
+                targetMethod.instructions.insertBefore(insn, list)
             }
         }
     }
@@ -202,6 +332,7 @@ private fun copyMethodToTarget(targetClass: ClassNode, mixinClass: ClassNode, so
     )
     sourceMethod.accept(newMethod)
     AsmHelper.remapMemberAccess(newMethod.instructions, mixinClass.name, targetClass.name)
+    AsmHelper.stripMixinAnnotations(newMethod)
     targetClass.methods.add(newMethod)
     return newName
 }
