@@ -37,11 +37,6 @@ dependencies {
         testFramework(TestFrameworkType.Platform)
 
         bundledPlugin("com.intellij.java")
-        bundledPlugin("org.jetbrains.kotlin")
-        bundledPlugin("ByteCodeViewer")
-        bundledPlugin("org.jetbrains.idea.maven")
-        bundledPlugin("com.intellij.gradle")
-        bundledPlugin("org.intellij.groovy")
 
         plugins("com.demonwav.minecraft-dev:$mcdevIdeaVersion-$mcdevVersion")
     }
